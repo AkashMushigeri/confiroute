@@ -212,6 +212,7 @@ with st.sidebar:
         """
         - 🩺 [Reviewer Queue](/Reviewer_Queue)
         - ⚖️ [Side-by-Side View](/Side_by_Side)
+        - 📊 [Analytics Dashboard](/Dashboard)
         """
     )
 

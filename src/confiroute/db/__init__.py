@@ -11,6 +11,11 @@ from confiroute.db.database import (
     get_resolved_reviews,
     get_query_result,
     get_system_stats,
+    insert_alert,
+    get_active_alerts,
+    has_recent_alert_of_type,
+    clear_alerts,
+    get_dashboard_query_records,
 )
 
 __all__ = [
@@ -24,4 +29,9 @@ __all__ = [
     "get_resolved_reviews",
     "get_query_result",
     "get_system_stats",
+    "insert_alert",
+    "get_active_alerts",
+    "has_recent_alert_of_type",
+    "clear_alerts",
+    "get_dashboard_query_records",
 ]

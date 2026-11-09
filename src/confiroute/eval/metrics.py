@@ -141,6 +141,100 @@ def compute_auroc(
         return None
 
 
+def compute_oracle_accuracy(
+    is_correct: Union[np.ndarray, List[int]],
+    routes: Union[np.ndarray, List[str]],
+) -> float:
+    """Compute overall system accuracy under an Idealized Clinician Oracle.
+
+    Scientific Note:
+    Assumes queries escalated to human review achieve 100% resolution accuracy.
+    This serves as an theoretical upper-bound benchmark for human-in-the-loop systems.
+    """
+    corr = np.array(is_correct, dtype=np.int32)
+    r_arr = np.array(routes, dtype=object)
+    total = len(corr)
+    if total == 0:
+        return 0.0
+
+    auto_correct = np.sum((r_arr == "direct") & (corr == 1))
+    human_escalated = np.sum(r_arr == "human")
+    # Tier 2 direct correct
+    tier2_correct = np.sum((r_arr == "tier2") & (corr == 1))
+
+    resolved_correct = auto_correct + tier2_correct + human_escalated
+    return round(float(resolved_correct / total), 4)
+
+
+def compute_reliability_diagram_bins(
+    confidence_scores: Union[np.ndarray, List[float]],
+    is_correct: Union[np.ndarray, List[int]],
+    n_bins: int = 10,
+) -> Dict[str, Any]:
+    """Calculate empirical accuracy and confidence across 10 equal bins for calibration diagrams."""
+    conf = np.array(confidence_scores, dtype=np.float64)
+    corr = np.array(is_correct, dtype=np.int32)
+    conf = np.clip(np.nan_to_num(conf, nan=0.5), 0.0, 1.0)
+
+    bin_boundaries = np.linspace(0.0, 1.0, n_bins + 1)
+    bin_centers = []
+    bin_accs = []
+    bin_confs = []
+    bin_counts = []
+
+    for b in range(n_bins):
+        low, high = bin_boundaries[b], bin_boundaries[b + 1]
+        if b == n_bins - 1:
+            in_bin = (conf >= low) & (conf <= high)
+        else:
+            in_bin = (conf >= low) & (conf < high)
+
+        count = int(np.sum(in_bin))
+        center = round(float((low + high) / 2.0), 3)
+        bin_centers.append(center)
+        bin_counts.append(count)
+
+        if count > 0:
+            bin_accs.append(round(float(np.mean(corr[in_bin])), 4))
+            bin_confs.append(round(float(np.mean(conf[in_bin])), 4))
+        else:
+            bin_accs.append(center)
+            bin_confs.append(center)
+
+    return {
+        "bin_centers": bin_centers,
+        "bin_accuracies": bin_accs,
+        "bin_confidences": bin_confs,
+        "bin_counts": bin_counts,
+    }
+
+
+def compute_bootstrap_ci(
+    values: Union[np.ndarray, List[Any]],
+    eval_fn: Any,
+    n_bootstraps: int = 500,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> Tuple[float, float]:
+    """Compute empirical bootstrap confidence interval."""
+    arr = np.array(values)
+    N = len(arr)
+    if N < 5:
+        base_val = eval_fn(arr)
+        return (base_val, base_val)
+
+    rng = np.random.RandomState(seed)
+    boot_stats = []
+    for _ in range(n_bootstraps):
+        sample_indices = rng.choice(N, size=N, replace=True)
+        boot_stats.append(eval_fn(arr[sample_indices]))
+
+    alpha = (1.0 - ci) / 2.0
+    low = float(np.percentile(boot_stats, alpha * 100))
+    high = float(np.percentile(boot_stats, (1.0 - alpha) * 100))
+    return (round(low, 4), round(high, 4))
+
+
 def compute_all_metrics(
     is_correct: List[int],
     routes: List[str],
@@ -165,6 +259,9 @@ def compute_all_metrics(
     ucer_high = compute_ucer_high(is_correct, is_auto, confidence_scores, high_threshold=high_threshold)
     ece = compute_ece(confidence_scores, is_correct)
     esc_rate = compute_escalation_rate(is_esc)
+    human_esc_rate = round(float(human_c / total), 4) if total > 0 else 0.0
+    tier2_rate = round(float(tier2_c / total), 4) if total > 0 else 0.0
+    oracle_acc = compute_oracle_accuracy(is_correct, routes)
     auroc = compute_auroc(confidence_scores, is_correct)
 
     mean_lat = round(float(np.mean(latencies)), 2) if latencies else 0.0
@@ -179,10 +276,13 @@ def compute_all_metrics(
         "tier2_count": tier2_c,
         "human_count": human_c,
         "auto_accuracy": auto_acc,
+        "oracle_accuracy": oracle_acc,
         "ucer": ucer,
         "ucer_high": ucer_high,
         "ece": ece,
         "escalation_rate": esc_rate,
+        "human_escalation_rate": human_esc_rate,
+        "tier2_rate": tier2_rate,
         "auroc": auroc,
         "mean_latency_ms": mean_lat,
         "mean_equivalent_cost": mean_cost,

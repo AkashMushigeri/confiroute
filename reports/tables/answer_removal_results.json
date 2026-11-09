@@ -1,0 +1,17 @@
+{
+  "dataset_split": "TEST_REMOVED (200 Questions)",
+  "total_queries": 3,
+  "unrouted_guesses_count": 3,
+  "unrouted_guess_rate": 1.0,
+  "unrouted_abstention_count": 0,
+  "unrouted_abstention_rate": 0.0,
+  "unrouted_ucer": 1.0,
+  "routed_human_escalation_count": 3,
+  "routed_human_escalation_rate": 1.0,
+  "routed_direct_guesses_count": 0,
+  "routed_direct_guess_rate": 0.0,
+  "routed_direct_abstention_count": 0,
+  "routed_direct_abstention_rate": 0.0,
+  "routed_ucer": 0.0,
+  "ucer_reduction_percent": 100.0
+}

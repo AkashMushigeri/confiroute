@@ -52,6 +52,25 @@ def route_query(
     low_thresh = low_threshold if low_threshold is not None else config.threshold_low
     tier2_accept = config.tier2_accept
 
+    # 0. Input validation check (Empty or abnormal query)
+    if not question or not question.strip():
+        return RouteDecision(
+            route="human",
+            status="pending_human",
+            color="red",
+            final_answer=None,
+            ai_draft_answer="",
+            scores={"s1": 0.0, "s2": 0.0, "s3": 0.0, "combined": 0.0},
+            is_high_risk=False,
+            risk_reason=None,
+            reason="Held for review: empty or invalid clinical query input",
+            tier_used=model_key,
+            tokens_used={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            cost_metadata={"real_cost": 0.0, "equivalent_cost": 0.0, "currency": "USD"},
+            is_mock=True,
+            tier2_attempted=False,
+        )
+
     # 1. Run Tier 1 Confidence Estimation Pipeline
     conf_res = get_confidence(
         question=question,

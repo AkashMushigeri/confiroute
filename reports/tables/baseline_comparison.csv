@@ -1,0 +1,7 @@
+baseline,description,auto_accuracy,oracle_accuracy,ucer,ucer_high,ece,human_escalation_rate,tier2_rate,mean_latency_ms,equivalent_cost_per_query,ci_95_accuracy,total_queries,ci_95_ucer
+B0: Small LLM Only,Small LLM alone; zero confidence checks; all queries directly released.,0.0,0.0,1.0,0.0,0.45,0.0,0.0,0.04,1.3e-05,"[0.0, 0.0]",3,
+B1: Strong LLM Only,Strong Tier 2 LLM alone; zero routing; all queries directly released.,0.0,0.0,1.0,0.0,0.6,0.0,1.0,0.03,4.4e-05,"[0.0, 0.0]",3,
+B2-S1: Single Signal (Token Prob (S1)),Routing strictly based on Token Prob (S1) >= 0.70.,0.0,0.6667,0.3333,1.0,0.5663,0.6667,0.0,12.0,5.7e-05,"[0.0, 0.0]",3,
+B2-S2: Single Signal (Self-Consistency (S2)),Routing strictly based on Self-Consistency (S2) >= 0.70.,0.0,0.6667,0.3333,1.0,0.6667,0.6667,0.0,12.0,5.7e-05,"[0.0, 0.0]",3,
+B2-S3: Single Signal (Self-Rated (S3)),Routing strictly based on Self-Rated (S3) >= 0.70.,0.0,0.3333,0.6667,1.0,0.75,0.3333,0.0,12.0,5.7e-05,"[0.0, 0.0]",3,
+B3: Full ConfiRoute System,Combined confidence + risk rules + Tier 2 escalation + human review.,0.0,0.6667,0.3333,1.0,0.6515,0.6667,0.0,150.0,0.000126,"[0.0, 0.0]",3,"[0.3333, 0.3333]"

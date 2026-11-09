@@ -75,6 +75,16 @@ class Config:
         self.raw_data_dir: Path = self.root_dir / dataset.get("raw_dir", "data/raw")
         self.processed_data_dir: Path = self.root_dir / dataset.get("processed_dir", "data/processed")
 
+        # Alerts configuration
+        alerts = config_dict.get("alerts", {})
+        self.alerts_config: Dict[str, Any] = {
+            "high_escalation_threshold": float(alerts.get("high_escalation_threshold", 0.50)),
+            "window_size": int(alerts.get("window_size", 20)),
+            "backlog_threshold": int(alerts.get("backlog_threshold", 10)),
+            "repeated_low_confidence_threshold": int(alerts.get("repeated_low_confidence_threshold", 3)),
+            "low_confidence_threshold": float(alerts.get("low_confidence_threshold", 0.50)),
+        }
+
     def get_reference_pricing(self, model_key: str = "tier1") -> Dict[str, float]:
         """Return reference pricing per 1K tokens for equivalent cost calculations."""
         model_info = self.models.get(model_key, {})

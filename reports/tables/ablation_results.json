@@ -1,0 +1,92 @@
+[
+  {
+    "configuration": "S1 Alone (Token Prob)",
+    "ece_10_bin": 0.5663,
+    "auroc": 0.5,
+    "brier_score": 0.3821,
+    "auto_accuracy": 0.0,
+    "ucer": 0.3333,
+    "escalation_rate": 0.6667,
+    "eval_threshold": 0.7
+  },
+  {
+    "configuration": "S2 Alone (Consistency)",
+    "ece_10_bin": 0.6667,
+    "auroc": 0.5,
+    "brier_score": 0.5185,
+    "auto_accuracy": 0.0,
+    "ucer": 0.3333,
+    "escalation_rate": 0.6667,
+    "eval_threshold": 0.7
+  },
+  {
+    "configuration": "S3 Alone (Self-Rated)",
+    "ece_10_bin": 0.75,
+    "auroc": 0.5,
+    "brier_score": 0.5796,
+    "auto_accuracy": 0.0,
+    "ucer": 0.6667,
+    "escalation_rate": 0.3333,
+    "eval_threshold": 0.7
+  },
+  {
+    "configuration": "S1 + S2 (Dual Signal)",
+    "ece_10_bin": 0.6165,
+    "auroc": 0.5,
+    "brier_score": 0.4474,
+    "auto_accuracy": 0.0,
+    "ucer": 0.3333,
+    "escalation_rate": 0.6667,
+    "eval_threshold": 0.7
+  },
+  {
+    "configuration": "S1 + S3 (Dual Signal)",
+    "ece_10_bin": 0.6582,
+    "auroc": 0.5,
+    "brier_score": 0.459,
+    "auto_accuracy": 0.0,
+    "ucer": 0.3333,
+    "escalation_rate": 0.6667,
+    "eval_threshold": 0.7
+  },
+  {
+    "configuration": "S2 + S3 (Dual Signal)",
+    "ece_10_bin": 0.7083,
+    "auroc": 0.5,
+    "brier_score": 0.5334,
+    "auto_accuracy": 0.0,
+    "ucer": 0.3333,
+    "escalation_rate": 0.6667,
+    "eval_threshold": 0.7
+  },
+  {
+    "configuration": "S1 + S2 + S3 (Weighted Avg)",
+    "ece_10_bin": 0.6515,
+    "auroc": 0.5,
+    "brier_score": 0.4648,
+    "auto_accuracy": 0.0,
+    "ucer": 0.3333,
+    "escalation_rate": 0.6667,
+    "eval_threshold": 0.7
+  },
+  {
+    "configuration": "Logistic Meta-Model (Platt)",
+    "ece_10_bin": 0.6515,
+    "auroc": 0.5,
+    "brier_score": 0.4648,
+    "auto_accuracy": 0.0,
+    "ucer": 0.3333,
+    "escalation_rate": 0.6667,
+    "eval_threshold": 0.7
+  },
+  {
+    "configuration": "Calibrated (Isotonic)",
+    "ece_10_bin": 0.6515,
+    "auroc": 0.5,
+    "brier_score": 0.4648,
+    "auto_accuracy": 0.0,
+    "ucer": 0.3333,
+    "escalation_rate": 0.6667,
+    "eval_threshold": 0.7
+  }
+]

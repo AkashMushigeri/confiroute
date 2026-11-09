@@ -472,3 +472,144 @@ def get_recent_history(limit: int = 20, custom_path: Optional[Path] = None) -> L
         return rows
     finally:
         conn.close()
+
+
+def insert_alert(
+    alert_type: str,
+    message: str,
+    severity: str = "warning",
+    custom_path: Optional[Path] = None,
+) -> int:
+    """Insert a new alert record into SQLite alerts table."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO alerts (alert_type, message, severity)
+            VALUES (?, ?, ?)
+            """,
+            (alert_type, message, severity),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_active_alerts(
+    limit: int = 50,
+    custom_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """Retrieve recent alerts ordered by newest first."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        cursor = conn.execute(
+            """
+            SELECT id, alert_type, message, severity, created_at
+            FROM alerts
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def has_recent_alert_of_type(
+    alert_type: str,
+    within_minutes: int = 60,
+    custom_path: Optional[Path] = None,
+) -> bool:
+    """Check if an alert of the specified type was triggered recently to prevent duplicates."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        cursor = conn.execute(
+            """
+            SELECT count(*) as c
+            FROM alerts
+            WHERE alert_type = ?
+              AND created_at >= datetime('now', '-' || ? || ' minutes')
+            """,
+            (alert_type, within_minutes),
+        )
+        row = cursor.fetchone()
+        return bool(row and row["c"] > 0)
+    finally:
+        conn.close()
+
+
+def clear_alerts(custom_path: Optional[Path] = None) -> None:
+    """Clear all alerts (e.g., for test setup)."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        conn.execute("DELETE FROM alerts")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_dashboard_query_records(
+    subject: Optional[str] = None,
+    topic: Optional[str] = None,
+    limit: int = 1000,
+    custom_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """Retrieve joined query records for dashboard filtering and charts."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        query = """
+            SELECT
+                q.id,
+                q.question,
+                q.correct_letter,
+                q.subject,
+                q.topic,
+                q.created_at,
+                s.s1,
+                s.s2,
+                s.s3,
+                s.combined,
+                r.route,
+                r.status,
+                r.color,
+                r.ai_draft_answer,
+                r.final_answer,
+                r.is_high_risk,
+                r.risk_reason,
+                r.reason,
+                c.latency_ms,
+                c.equivalent_cost,
+                c.prompt_tokens,
+                c.completion_tokens,
+                c.total_tokens,
+                rev.decision AS review_decision,
+                rev.corrected_answer
+            FROM queries q
+            LEFT JOIN signals s ON q.id = s.query_id
+            LEFT JOIN routes r ON q.id = r.query_id
+            LEFT JOIN costs c ON q.id = c.query_id
+            LEFT JOIN reviews rev ON q.id = rev.query_id
+            WHERE 1=1
+        """
+        params: List[Any] = []
+        if subject and subject != "All":
+            query += " AND q.subject = ?"
+            params.append(subject)
+        if topic and topic != "All":
+            query += " AND q.topic = ?"
+            params.append(topic)
+
+        query += " ORDER BY q.created_at DESC LIMIT ?"
+        params.append(limit)
+
+        cursor = conn.execute(query, tuple(params))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()

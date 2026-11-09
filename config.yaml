@@ -79,3 +79,10 @@ risk_rules:
     - "teratogenic"
     - "lethal dose"
     - "resuscitation"
+
+alerts:
+  high_escalation_threshold: 0.50      # Trigger if escalation rate > 50% over window
+  window_size: 20                      # Sliding window of last N queries
+  backlog_threshold: 10                # Trigger if pending reviews > 10
+  repeated_low_confidence_threshold: 3  # Trigger if 3 consecutive low-confidence queries for same subject/topic
+  low_confidence_threshold: 0.50       # Low confidence boundary
