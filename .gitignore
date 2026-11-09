@@ -44,6 +44,10 @@ data/raw/
 .coverage
 htmlcov/
 
+# Models and Weights
+*.joblib
+*.pkl
+
 # IDE & OS
 .vscode/
 .idea/

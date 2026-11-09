@@ -187,22 +187,33 @@ with st.sidebar:
         st.info("⚪ Groq API: Key Missing in .env")
 
     st.markdown("---")
-    st.header("📐 Routing Thresholds")
+    st.header("📐 Routing Thresholds & Calibration")
     st.markdown(
         f"""
         - **Direct Answer (Green):** $\\ge {config.threshold_high:.2f}$
         - **Tier 2 Escalation (Yellow):** $[{config.threshold_low:.2f}, {config.threshold_high:.2f})$
         - **Tier 2 Acceptance:** $\\ge {config.tier2_accept:.2f}$
         - **Human Review (Red):** $< {config.threshold_low:.2f}$
-        - **High-Risk Medical Override:** Overrides all thresholds to Clinician Review.
+        - **High-Risk Medical Override:** Active
 
         **Signal Weights:**
         - S1 Token Prob: `{config.weight_s1*100:.0f}%`
         - S2 Self-Consistency: `{config.weight_s2*100:.0f}%`
         - S3 Self-Rated: `{config.weight_s3*100:.0f}%`
+        
+        **Calibration Status:**
+        - Meta-Model: Platt Scaling / Isotonic ready
+        - Current Mode: Dynamic Redistributed Average
         """
     )
-    st.caption("• Review Queue available in sidebar: **1_Reviewer_Queue**")
+    st.markdown("---")
+    st.subheader("📑 Application Pages")
+    st.markdown(
+        """
+        - 🩺 [Reviewer Queue](/Reviewer_Queue)
+        - ⚖️ [Side-by-Side View](/Side_by_Side)
+        """
+    )
 
 # Header Section
 col_head1, col_head2 = st.columns([3, 1])

@@ -1,0 +1,14 @@
+question_id,subject,topic,correct_option,predicted_option,is_correct,s1_token_prob,s2_consistency,s3_self_rated,combined_score,prompt_tokens,completion_tokens,total_tokens,latency_ms,model_name,provider,is_mock,real_cost,equivalent_cost,timestamp
+7ea9f605-3179-45af-8265-cbd861722262,Dental,General,A,C,0,0.2425321880487554,0.3333,0.75,0.422,187,40,227,4.61,llama3.2:3b,mock,True,0.0,5.1e-05,2026-11-09 23:16:22
+e7748524-13f1-45f7-8fa8-c2ad528570ba,Surgery,Urology,C,B,0,0.6118672779306885,0.6667,0.59,0.6218,298,40,338,4.37,llama3.2:3b,mock,True,0.0,6.9e-05,2026-11-09 23:16:22
+fb2e4621-c209-4746-9c52-e8679882f93b,Pathology,Bleeding Disorders,B,B,1,0.8445388884190606,1.0,0.91,0.9108,180,40,220,2.97,llama3.2:3b,mock,True,0.0,5.1e-05,2026-11-09 23:16:22
+afd9cc3c-8c36-479b-be09-e5c8212014e1,Physiology,General,B,A,0,0.8732270219688534,1.0,0.61,0.8323,253,40,293,2.19,llama3.2:3b,mock,True,0.0,6.3e-05,2026-11-09 23:16:22
+58e100f1-2330-418c-808e-7affdbfb1956,Ophthalmology,General,D,B,0,0.6105812684537727,0.6667,0.59,0.6212,211,40,251,1.88,llama3.2:3b,mock,True,0.0,5.6e-05,2026-11-09 23:16:22
+bdb318ff-7fe0-4ac5-b1bd-45ea0d21e3b6,Surgery,Prostate and seminal vesicles,D,B,0,0.6176043957802384,0.6667,0.31,0.5401,261,40,301,2.55,llama3.2:3b,mock,True,0.0,6.3e-05,2026-11-09 23:16:43
+cf27425c-59c2-4d8c-90c9-8fe4c02249df,Pathology,General,C,A,0,0.6155376750472512,0.6667,0.75,0.6712,196,40,236,1.4,llama3.2:3b,mock,True,0.0,5.4e-05,2026-11-09 23:16:43
+71723e91-54e3-4c7c-81d8-270e0a9b0522,Medicine,Immunology and Rheumatology,A,D,0,0.8695947174511423,1.0,0.64,0.8398,220,40,260,1.29,llama3.2:3b,mock,True,0.0,5.7e-05,2026-11-09 23:16:43
+04940eb9-1a48-4e10-87fe-a4debab8741f,Surgery,General,A,B,0,0.2474316632469614,0.3333,0.53,0.358,205,40,245,1.58,llama3.2:3b,mock,True,0.0,5.4e-05,2026-11-09 23:16:43
+c0245f0d-2ee9-428f-871d-afc265ae792d,Pediatrics,General,B,C,0,0.6150771157133106,0.6667,0.52,0.602,180,40,220,1.52,llama3.2:3b,mock,True,0.0,5.1e-05,2026-11-09 23:16:43
+7010f58c-0284-4199-bf04-72b8821ca5a2,Forensic Medicine,Special topics,D,C,0,0.8697536015717724,1.0,0.82,0.8939,184,40,224,3.55,llama3.2:3b,mock,True,0.0,5.1e-05,2026-11-09 23:28:51
+00d1d295-5998-4780-b5c8-3541ce055bd0,Medicine,Haematology,C,A,0,0.8446367294072419,1.0,0.33,0.7369,187,40,227,4.27,llama3.2:3b,mock,True,0.0,5.1e-05,2026-11-09 23:28:51
+e09ebb34-ac1f-4bbe-8502-120b05141534,Physiology,FMGE 2017,C,C,1,0.8761751392986097,1.0,0.47,0.7915,175,40,215,6.03,llama3.2:3b,mock,True,0.0,5.1e-05,2026-11-09 23:28:51

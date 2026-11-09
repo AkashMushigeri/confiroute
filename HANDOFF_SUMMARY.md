@@ -1,133 +1,158 @@
-# HANDOFF SUMMARY — CONFIROUTE MILESTONE 2 (50%)
+# HANDOFF SUMMARY — CONFIROUTE MILESTONE 3 (~70%)
 
-## 1. Milestone Completed
-**Milestone 2:** Real Provider Layer (Ollama + Groq), Tier 2 Escalation & Acceptance Routing, FastAPI REST Backend Service, Clinician Human Review Queue, and Upgraded Streamlit Interface (~50% of total project specification).
+## 1. Milestone Status & Overview
+- **Project:** ConfiRoute — Confidence-Aware LLM Routing System that Escalates Low-Certainty Medical Cases to Humans.
+- **Milestone Scope:** Milestone 3 (~70% development scope completed).
+- **Previous Milestone:** Milestone 2 (~50% completed, 41 passing tests).
+- **Current Test Suite:** **65 passing automated tests** (0 failures, 100% pass rate).
+- **Git Branch:** `main`. Local commit hash to be updated.
+- **Budget Expended:** ₹0.00 (Zero paid cloud services, lightweight CPU-compatible dependencies).
 
 ---
 
-## 2. Technical Architecture
+## 2. Technical Deliverables Completed in Milestone 3
+
+### A. Live Provider & Hardware Assessment (Task 1 & Task 2)
+1. **Ollama Status:**
+   - Evaluated on Windows host: Ollama is currently **not installed / not running on port 11434**.
+   - Hardware analysis for Intel CPU, 8 GB RAM (~3 GB free):
+     - **Recommendation 1:** `llama3.2:1b` (1.3 GB download, ~1.8 GB RAM footprint).
+     - **Recommendation 2:** `qwen2.5:1.5b` (1.0 GB download, ~1.5 GB RAM footprint).
+     - **Safety constraint respected:** No model downloaded without developer authorization.
+2. **Groq Status:**
+   - `.env.example` verified; free-tier models supported: `llama-3.3-70b-versatile` and `llama-3.1-8b-instant`.
+   - Exponential backoff with jitter and disk caching intact.
+3. **Offline / Mock Mode:** Completely deterministic, instant, and preserves ₹0 development workflow.
+
+### B. Resumable Confidence Data Collector (Task 3)
+- **Module:** [`scripts/collect_confidence_data.py`](file:///C:/Users/akash/Desktop/confiroute-miniproject/confiroute/scripts/collect_confidence_data.py)
+- **Features:**
+  - Evaluates MedMCQA splits (`dev`, `val`, `test`, `test_removed`).
+  - Supports `--provider mock|ollama|groq` and `--limit N`.
+  - Resumable: skips already evaluated question IDs on disk.
+  - Per-row flush to CSV: ensures progress is never lost if interrupted.
+  - Strict safety guard: runs with $N > 20$ require explicit `--confirm` flag to prevent accidental quota exhaustion or CPU lockup.
+  - Clearly logs `is_mock=True/False` to prevent confusing mock data with experimental results.
+
+### C. Confidence Calibration Meta-Model (Task 4)
+- **Module:** [`src/confiroute/confidence/calibration.py`](file:///C:/Users/akash/Desktop/confiroute-miniproject/confiroute/src/confiroute/confidence/calibration.py)
+- **Features:**
+  - `ConfidenceCalibrator` supporting `method="platt"`, `method="isotonic"`, and `method="weighted_average"`.
+  - Platt scaling fits a Logistic Regression meta-model mapping $[S_1, S_2, S_3]$ to empirical probability of correctness.
+  - Isotonic Regression calibrates monotonic empirical accuracy against composite weighted confidence.
+  - Dynamic missing signal imputation: imputes missing signals (e.g. when S1 token logprobs are unavailable) with neutral 0.50 without crashing.
+  - K-Fold cross-fitting (`cross_fit_predict`) to evaluate validation split without data leakage.
+  - Serialization and deserialization via `joblib.dump` / `joblib.load`.
+  - Synthetic validation feature generation helper for automated testing.
+
+### D. Comprehensive Evaluation Benchmark Metrics (Task 5)
+- **Module:** [`src/confiroute/eval/metrics.py`](file:///C:/Users/akash/Desktop/confiroute-miniproject/confiroute/src/confiroute/eval/metrics.py)
+- **Metrics Implemented:**
+  1. `compute_auto_accuracy`: Accuracy strictly among direct/auto answers.
+  2. `compute_ucer`: Unsafe Confident Error Rate $= \frac{\text{auto} \land \text{wrong}}{\text{total queries}}$.
+  3. `compute_ucer_high`: UCER strictly among high-confidence auto-released answers ($\ge 0.80$).
+  4. `compute_ece`: Expected Calibration Error over 10 equal-width bins with boundary handling.
+  5. `compute_escalation_rate`: Fraction of queries held for Tier 2 escalation or human clinician review.
+  6. `compute_auroc`: ROC-AUC distinguishing correct from incorrect answers.
+  7. `compute_all_metrics`: Unified aggregator returning counts, accuracy, UCER, ECE, AUROC, mean latency (ms), and equivalent cost ($).
+
+### E. Threshold Grid Search & Pareto Optimization (Task 6)
+- **Module:** [`src/confiroute/routing/thresholds.py`](file:///C:/Users/akash/Desktop/confiroute-miniproject/confiroute/src/confiroute/routing/thresholds.py)
+- **Features:**
+  - `simulate_routing_for_thresholds`: Evaluates routing decisions across candidates under risk overrides.
+  - `grid_search_thresholds`: Performs grid search over $(\tau_{\text{low}}, \tau_{\text{high}})$ pairs where $\tau_{\text{high}} > \tau_{\text{low}}$.
+  - Multi-objective tuning:
+    - `"min_ucer"` subject to maximum clinician escalation rate ($\le 40\%$).
+    - `"max_utility"` optimizing $\text{Accuracy} - \lambda \cdot \text{Escalation Rate}$.
+  - Strict scientific partition: tuning restricted strictly to VALIDATION split to prevent TEST leakage.
+  - `save_thresholds`: Persists chosen thresholds and metadata to JSON.
+
+### F. Side-by-Side Comparative Demonstration (Task 7 & Task 8)
+- **Streamlit Page:** [`app/pages/2_Side_by_Side.py`](file:///C:/Users/akash/Desktop/confiroute-miniproject/confiroute/app/pages/2_Side_by_Side.py)
+- **Features:**
+  - Directly demonstrates contrast between raw unrouted LLM (Baseline B0) and ConfiRoute (System B3).
+  - 4 Preset clinical scenarios:
+    1. *High-Confidence Factual Query:* Both answer correctly; ConfiRoute confirms certainty $\ge 0.80$ and safely releases.
+    2. *Ambiguous / Hallucination-Prone Question:* Unrouted LLM answers blindly with zero caveats; ConfiRoute measures low confidence ($< 0.50$) and escalates.
+    3. *Answer-Removal Setting:* Correct option removed; unrouted LLM hallucinates; ConfiRoute detects uncertainty.
+    4. *High-Risk Emergency Dosage:* Contains pediatric / emergency dosage keywords; ConfiRoute overrides score and halts release for human review.
+  - Interactive custom question editor with side-by-side comparative cards and color-coded status badges.
+- **Homepage Improvements:** Updated [`app/Home.py`](file:///C:/Users/akash/Desktop/confiroute-miniproject/confiroute/app/Home.py) with navigation pills to Reviewer Queue and Side-by-Side page, plus active threshold and calibration indicators in the sidebar.
+
+### G. Expanded Automated Test Suite (Task 9)
+- **New Test Modules:**
+  - `tests/test_calibration.py`: 9 unit tests (Platt scaling, isotonic regression, imputation, cross-fitting, joblib save/load, error handling).
+  - `tests/test_metrics.py`: 7 unit tests (Hand-calculated cases for auto-accuracy, UCER, UCER_high, 10-bin ECE, escalation rate, AUROC, unified metrics).
+  - `tests/test_thresholds.py`: 4 unit tests (routing simulation, min_ucer search, max_utility search, JSON persistence).
+  - `tests/test_side_by_side.py`: 4 unit tests (preset scenario structure, unrouted vs routed behavior across confidence levels and emergency overrides).
+- **Total Test Count:** **65 tests passed in 3.07 seconds**.
+
+---
+
+## 3. Directory Structure After Milestone 3
+
 ```text
-Medical Query + Options
-          │
-          ▼
-┌─────────────────────────┐
-│ Tier 1 Small Model      │ (Local Ollama / Mock)
-└───────────┬─────────────┘
-            ▼
-┌─────────────────────────┐
-│ Confidence Estimation   │ ──► S1: Token Prob (Numerically stable softmax)
-│ (3 Signals)             │ ──► S2: Self-Consistency (N=3, T=0.7 agreement)
-│                         │ ──► S3: Self-Rated Certainty (0-100 parsed to 0-1)
-└───────────┬─────────────┘
-            ▼
-┌─────────────────────────┐
-│ High-Risk Safety Rule   │ ──► Dosage, Overdose, Cardiac, Pregnancy
-└───────────┬─────────────┘
-            │
-    ┌───────┴───────────────┐
-    │ High-Risk Match?       │
-    │ YES                   │ NO
-    ▼                       ▼
-┌─────────────────┐  ┌──────────────────────────────────────────────┐
-│ HUMAN REVIEW    │  │ Confidence Bands:                            │
-│ (Override: Red) │  │ • Score >= 0.80  -> DIRECT ANSWER (Green)   │
-│ Draft Withheld  │  │ • 0.50 <= S < 0.80 -> TIER 2 ESCALATION (Yellow) │
-└─────────────────┘  │ • Score < 0.50   -> HUMAN REVIEW (Red)       │
-                     └──────────────────────┬───────────────────────┘
-                                            │
-                                            ▼
-                     ┌──────────────────────────────────────────────┐
-                     │ Tier 2 Strong Model (Groq API / Free Tier)   │
-                     │ • Re-evaluates S2, S3 with dynamic weights   │
-                     │ • Tier 2 Score >= 0.80 -> DIRECT (Green)     │
-                     │ • Tier 2 Score < 0.80  -> HUMAN (Red)        │
-                     │ • API Quota / Offline -> Safe Pending State  │
-                     └──────────────────────────────────────────────┘
-                                            │
-                                            ▼
-                     ┌──────────────────────────────────────────────┐
-                     │ FastAPI REST Backend & SQLite Persistence    │
-                     │ • POST /ask, GET /queue, POST /review/{id}   │
-                     └──────────────────────┬───────────────────────┘
-                                            │
-                                            ▼
-                     ┌──────────────────────────────────────────────┐
-                     │ Streamlit Demo & Clinician Review Queue      │
-                     │ • app/Home.py (Traffic light meter)          │
-                     │ • app/pages/1_Reviewer_Queue.py (Audit log)  │
-                     └──────────────────────────────────────────────┘
+confiroute/
+├── app/
+│   ├── Home.py                       # Enhanced homepage with calibration sidebar & quick nav
+│   └── pages/
+│       ├── 1_Reviewer_Queue.py       # Clinician human review interface
+│       └── 2_Side_by_Side.py         # Side-by-side comparative demo (B0 vs B3)
+├── reports/
+│   └── tables/
+│       └── mock_dev_confidence.csv   # Verified confidence evaluation logs
+├── scripts/
+│   ├── init_db.py                    # SQLite database initializer
+│   ├── run_demo.py                   # 20-question pipeline runner
+│   └── collect_confidence_data.py    # Resumable evaluation data collector
+├── src/confiroute/
+│   ├── api/                          # FastAPI REST endpoints (/ask, /queue, /review, /stats)
+│   ├── confidence/
+│   │   ├── calibration.py            # Platt scaling, isotonic regression, joblib persistence
+│   │   ├── combiner.py               # Dynamic signal redistribution combiner
+│   │   ├── consistency.py            # S2: Self-consistency agreement
+│   │   ├── self_rating.py            # S3: Self-rated certainty extractor
+│   │   └── token_prob.py             # S1: Numerically stable softmax
+│   ├── data/                         # MedMCQA loader and dataset split generators
+│   ├── db/                           # SQLite transactions, schema, and review helpers
+│   ├── eval/
+│   │   └── metrics.py                # Auto-accuracy, UCER, UCER_high, 10-bin ECE, AUROC
+│   ├── llm/                          # Unified LLM provider interface, disk cache, pricing
+│   └── routing/
+│       ├── risk_rules.py             # Clinical keyword risk screening
+│       ├── router.py                 # Multi-tier routing engine
+│       └── thresholds.py             # Validation-split grid search threshold tuner
+└── tests/                            # 65 automated pytest tests
 ```
 
 ---
 
-## 3. Files Created & Modified in Milestone 2
-- `src/confiroute/llm/providers.py` **[NEW]**: `BaseLLMProvider`, `OllamaProvider`, `GroqProvider`, `MockProvider`, and custom exceptions (`MissingAPIKeyError`, `ProviderUnavailableError`, `RateLimitExceededError`).
-- `src/confiroute/llm/base.py` **[MODIFIED]**: Integrated `get_provider()`, latency measurement, and runtime provider override.
-- `src/confiroute/llm/__init__.py` **[MODIFIED]**: Exported new provider classes and exceptions.
-- `src/confiroute/confidence/combiner.py` **[MODIFIED]**: Added `extract_option_letter()`, provider passthrough, and dynamic token usage aggregation.
-- `src/confiroute/routing/router.py` **[MODIFIED]**: Implemented full Tier 2 escalation, Tier 2 acceptance check ($\ge 0.80$), rejection fallback, and error handling.
-- `src/confiroute/db/database.py` **[MODIFIED]**: Added review operations (`record_review_decision`, `get_pending_reviews`, `get_resolved_reviews`, `get_query_result`, `get_system_stats`).
-- `src/confiroute/db/__init__.py` **[MODIFIED]**: Exported review query functions.
-- `src/confiroute/api/main.py` **[NEW]**: FastAPI backend service with Pydantic validation, CORS, `/ask`, `/queue`, `/review/{id}`, `/result/{id}`, `/stats`.
-- `src/confiroute/api/__init__.py` **[NEW]**: Package init.
-- `app/Home.py` **[MODIFIED]**: Added Provider Selector (Mock vs Real), Ollama/Groq live status check, Tier 2 escalation presentation.
-- `app/pages/1_Reviewer_Queue.py` **[NEW]**: Clinician Review Queue with Approve / Edit / Reject workflow, draft withholding, and resolved audit log.
-- `requirements.txt` & `pyproject.toml` **[MODIFIED]**: Added `fastapi` and `httpx`.
-- `tests/test_providers.py` **[NEW]**: 6 tests for Ollama/Groq providers, 429 backoff, missing keys.
-- `tests/test_tier2_routing.py` **[NEW]**: 5 tests for Tier 2 escalation, acceptance, rejection, and error fallbacks.
-- `tests/test_reviewer.py` **[NEW]**: 5 tests for clinician review lifecycle (approve, edit, reject).
-- `tests/test_api.py` **[NEW]**: 6 tests for FastAPI REST endpoints using `TestClient`.
-- `tests/test_routing.py` **[MODIFIED]**: Updated boundary condition test for Tier 1 mapping.
-- `README.md` **[MODIFIED]**: Updated architecture, run instructions for FastAPI and Streamlit, Ollama hardware sizing, and Git instructions.
+## 4. Verification & Command Checklist
 
----
+To verify the Milestone 3 implementation from PowerShell:
 
-## 4. Verification & Test Results
-- **Automated Test Suite:** **41 tests passed** in 4.11 seconds (100% pass rate).
-- **FastAPI Endpoints Verified:** Tested `/health`, `/ask`, `/queue`, `/review/{id}`, `/result/{id}`, `/stats` with `TestClient`.
-- **Database Status:** Full SQLite support for query logging, confidence signals, routing history, review actions, and cost tracking.
-- **Offline / Mock Mode:** Fully functional without internet, credit card, or active API keys.
-
----
-
-## 5. Real Model Integration Status & Recommendations
-
-### Tier 1 (Local Ollama):
-- **Provider Code:** Fully implemented in [`providers.py`](file:///c:/Users/akash/Desktop/confiroute-miniproject/confiroute/src/confiroute/llm/providers.py).
-- **Hardware Analysis for 8 GB Laptop (~3 GB Free RAM):**
-  - **Recommended Model:** `llama3.2:1b`
-  - **Approximate Download Size:** ~1.3 GB
-  - **Estimated RAM Footprint:** ~1.8 GB RAM (runs safely inside 3 GB available memory).
-  - **Suitability:** Fast CPU inference (~20–40 tokens/sec on Intel CPU), official Ollama support.
-  - **Alternative:** `qwen2.5:1.5b` (~1.0 GB download).
-  - *User Approval Requirement:* As requested, model weights will only be downloaded after user confirmation.
-
-### Tier 2 (Groq Free Tier):
-- **Provider Code:** Fully implemented with automatic HTTP 429 exponential backoff in [`providers.py`](file:///c:/Users/akash/Desktop/confiroute-miniproject/confiroute/src/confiroute/llm/providers.py).
-- **Model:** `llama-3.3-70b-versatile` (free tier compatible).
-- **Status:** Ready. Requires user to add `GROQ_API_KEY` to `.env` (free key from [console.groq.com](https://console.groq.com)).
-
----
-
-## 6. Commands to Run & Verify
 ```powershell
+# 1. Activate environment
 cd C:\Users\akash\Desktop\confiroute-miniproject\confiroute
 .\.venv\Scripts\Activate.ps1
 
-# Run complete test suite (41 tests)
+# 2. Run the complete 65-test suite
 pytest -v
 
-# Run FastAPI Backend Server (Terminal 1)
+# 3. Test confidence data collection (mock mode, 3 samples)
+python scripts/collect_confidence_data.py --split dev --provider mock --limit 3
+
+# 4. Start FastAPI service
 uvicorn confiroute.api.main:app --port 8000 --reload
 
-# Run Streamlit Web Application (Terminal 2)
+# 5. Launch Streamlit UI
 streamlit run app/Home.py
 ```
 
 ---
 
-## 7. Next Development Milestone (Milestone 3 / ~70%)
-- **Phase 2 Calibration:** Fit logistic regression meta-model on `val.jsonl` features to optimize combined confidence.
-- **Phase 3 Threshold Tuning:** Run grid search on validation set to find Pareto-optimal thresholds balancing accuracy, UCER, and escalation rate.
-- **Phase 4 Side-by-Side View:** Build `app/pages/2_Side_by_Side.py` comparing unrouted baseline vs ConfiRoute.
-- **Phase 5 Full Evaluation:** Execute baseline comparison (B0, B1, B2, B3) and answer-removal test on `test_removed.jsonl`.
+## 5. Scope for Next Milestone (Milestone 4 — ~70% to 100%)
+1. **Full Benchmark Experimentation:** Run evaluation on complete VAL (200) and TEST (300) splits, computing official comparison table between B0 (unrouted Tier 1), B1 (Tier 1 + S1 only), B2 (Tier 1 + composite confidence), and B3 (ConfiRoute multi-tier + safety layer).
+2. **Answer-Removal Setting Analysis:** Evaluate hallucination rate on `TEST_REMOVED` (200) split to demonstrate refusal and human escalation behavior.
+3. **Report Generation & Visualizations:** Generate publication-ready figures (Reliability diagram calibration curves, Pareto trade-off curves, routing decision Sankey diagrams, cost vs accuracy curves).
+4. **Final Packaging & Export:** Complete documentation, reproducible execution scripts, and final submission archive.

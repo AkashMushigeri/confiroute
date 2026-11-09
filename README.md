@@ -6,9 +6,9 @@
 
 ---
 
-## 📌 Project Overview (Milestone 2 — ~50% Complete)
+## 📌 Project Overview (Milestone 3 — ~70% Complete)
 
-Large Language Models (LLMs) often generate fluent, persuasive answers even when clinically incorrect ("hallucinations"). ConfiRoute is **not a new medical chatbot**; it is an intelligent **routing and safety layer** that sits between users and LLMs.
+Large Language Models (LLMs) often generate fluent, persuasive answers even when clinically incorrect ("hallucinations"). ConfiRoute is **not a new medical chatbot**; it is an intelligent **confidence-aware routing and safety layer** that sits between users and LLMs.
 
 ### System Architecture & Routing Flow:
 ```text
@@ -35,7 +35,7 @@ Large Language Models (LLMs) often generate fluent, persuasive answers even when
                                          v
                      +---------------------------------------+
                      |       Combined Confidence Score       |
-                     |      (Dynamic Redistributed Wavg)     |
+                     |    (Dynamic Wavg / Meta-Calibrator)   |
                      +---------------------------------------+
                                          |
                                          v
@@ -49,7 +49,7 @@ Large Language Models (LLMs) often generate fluent, persuasive answers even when
             | YES                                                    | NO
             v                                                        v
 +------------------------+                     +-----------------------------------------+
-|      HUMAN REVIEW      |                     | Check Confidence Score Bands:           |
+|      HUMAN REVIEW      |                     | Check Calibrated Confidence Bands:      |
 | (Mandatory Override)   |                     | • Score >= 0.80 -> DIRECT ANSWER (🟢)   |
 | Status: pending_human  |                     | • 0.50 <= Score < 0.80 -> TIER 2 (🟡)  |
 | AI Draft Withheld      |                     | • Score < 0.50 -> HUMAN REVIEW (🔴)     |
@@ -72,7 +72,7 @@ ConfiRoute is engineered to run on standard consumer hardware with **₹0 budget
 - **Operating System:** Windows 10/11 (PowerShell)
 - **RAM:** 8 GB (~3 GB available memory)
 - **CPU:** Standard ~1.6 GHz Intel CPU (no dedicated GPU required)
-- **Dependencies:** Python 3.10+, FastAPI, Uvicorn, Streamlit, SQLite, NumPy, pandas, PyYAML, pytest, requests, pyarrow.
+- **Dependencies:** Python 3.10+, FastAPI, Uvicorn, Streamlit, SQLite, NumPy, pandas, PyYAML, pytest, requests, pyarrow, scikit-learn, joblib.
 - **Provider Support:**
   - **Mock Mode:** 100% offline, deterministic, instant response.
   - **Tier 1 (Local Ollama):** Supports 1B–1.5B class models (`llama3.2:1b` or `qwen2.5:1.5b`) on localhost port 11434.
@@ -87,10 +87,10 @@ ConfiRoute is engineered to run on standard consumer hardware with **₹0 budget
 confiroute/
 │
 ├── README.md                   # Project documentation and setup guide
-├── HANDOFF_SUMMARY.md          # Milestone 2 handoff report
+├── HANDOFF_SUMMARY.md          # Milestone 3 handoff report (~70% scope)
 ├── requirements.txt            # Lightweight, CPU-friendly dependencies
 ├── .env.example                # Template for Groq API keys
-├── .gitignore                  # Git ignore rules for venv, caches, db, data/raw
+├── .gitignore                  # Git ignore rules for venv, caches, db, models, data/raw
 ├── config.yaml                 # System, model, confidence weights & risk rules
 ├── pyproject.toml              # Editable package configuration
 │
@@ -112,11 +112,17 @@ confiroute/
 │   │   ├── token_prob.py       # S1: Numerically stable log-prob softmax
 │   │   ├── consistency.py      # S2: Self-consistency majority agreement
 │   │   ├── self_rating.py      # S3: Robust 0-100 certainty regex parser
-│   │   └── combiner.py         # Dynamic weight redistribution & combiner
+│   │   ├── combiner.py         # Dynamic weight redistribution & combiner
+│   │   └── calibration.py      # Platt scaling, isotonic regression & joblib persistence
 │   │
 │   ├── routing/
 │   │   ├── risk_rules.py       # Regex detector for dosage, overdose, cardiac
-│   │   └── router.py           # Threshold router, Tier 2 escalation & safe fallback
+│   │   ├── router.py           # Threshold router, Tier 2 escalation & safe fallback
+│   │   └── thresholds.py       # Grid search threshold optimization & Pareto trade-offs
+│   │
+│   ├── eval/
+│   │   ├── __init__.py         # Evaluation package exports
+│   │   └── metrics.py          # Auto-accuracy, UCER, UCER_high, 10-bin ECE, AUROC
 │   │
 │   ├── db/
 │   │   ├── schema.sql          # 6 SQLite tables with foreign keys & indices
@@ -129,16 +135,22 @@ confiroute/
 ├── app/
 │   ├── Home.py                 # Streamlit web demo with traffic light meter
 │   └── pages/
-│       └── 1_Reviewer_Queue.py # Human-in-the-loop clinician review interface
+│       ├── 1_Reviewer_Queue.py # Human-in-the-loop clinician review interface
+│       └── 2_Side_by_Side.py   # Side-by-side comparative demonstration (B0 vs B3)
 │
 ├── scripts/
 │   ├── init_db.py              # CLI database table initialization
-│   └── run_demo.py             # 20-question pipeline test & summary stats
+│   ├── run_demo.py             # 20-question pipeline test & summary stats
+│   └── collect_confidence_data.py # Resumable data collection on MedMCQA splits
 │
 └── tests/
     ├── test_data.py            # Dataset validation & answer indexing tests
     ├── test_llm.py             # Mock LLM, caching & pricing tests
     ├── test_confidence.py      # S1, S2, S3 & combiner redistribution tests
+    ├── test_calibration.py     # Platt scaling, isotonic regression & cross-fitting tests
+    ├── test_metrics.py         # Hand-calculated evaluation metric unit tests
+    ├── test_thresholds.py      # Grid search threshold tuning & Pareto trade-off tests
+    ├── test_side_by_side.py    # Side-by-side UI logic & scenario preset tests
     ├── test_routing.py         # Risk detection & threshold boundary tests
     ├── test_db.py              # SQLite schema & transaction tests
     ├── test_providers.py       # Ollama & Groq provider tests (mocked HTTP)
@@ -153,7 +165,7 @@ confiroute/
 
 Follow these exact steps from PowerShell:
 
-### 1. Open the Repository & Activate Virtual Environment
+### 1. Open Repository & Activate Virtual Environment
 ```powershell
 cd C:\Users\akash\Desktop\confiroute-miniproject\confiroute
 
@@ -167,13 +179,22 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-### 3. Run the Automated Test Suite (41 Tests)
+### 3. Run the Automated Test Suite (65 Tests)
 ```powershell
 pytest -v
 ```
-*All 41 unit & integration tests run offline without external API keys or GPU dependencies.*
+*All 65 unit & integration tests run offline without external API keys or GPU dependencies.*
 
-### 4. Start the FastAPI Backend Service
+### 4. Collect Confidence Data (Resumable CLI)
+```powershell
+# Small dry run on DEV split (3 questions, mock provider)
+python scripts/collect_confidence_data.py --split dev --provider mock --limit 3
+
+# Larger runs (> 20 questions require --confirm)
+python scripts/collect_confidence_data.py --split val --provider mock --limit 50 --confirm
+```
+
+### 5. Start the FastAPI Backend Service
 In terminal 1:
 ```powershell
 uvicorn confiroute.api.main:app --port 8000 --reload
@@ -186,13 +207,26 @@ uvicorn confiroute.api.main:app --port 8000 --reload
   - `GET /result/{query_id}`: Check released final answer
   - `GET /stats`: Real-time system analytics
 
-### 5. Launch the Streamlit Web Application
+### 6. Launch the Streamlit Web Application
 In terminal 2:
 ```powershell
 streamlit run app/Home.py
 ```
-- Main Demo: `http://localhost:8501` (includes deterministic test presets, traffic light status badges, query history).
-- Reviewer Queue Page: Available from the sidebar under **1_Reviewer_Queue** (`http://localhost:8501/Reviewer_Queue`).
+- **Main Demo:** `http://localhost:8501` (includes test presets, traffic light meter, calibration indicators).
+- **Reviewer Queue Page:** Accessible from the sidebar under **1_Reviewer_Queue** (`http://localhost:8501/Reviewer_Queue`).
+- **Side-by-Side Comparison:** Accessible under **2_Side_by_Side** (`http://localhost:8501/Side_by_Side`).
+
+---
+
+## 🔬 Benchmark Metrics & Definitions
+
+The system measures 6 primary clinical safety and routing metrics:
+1. **Auto-Accuracy:** Accuracy strictly among questions answered automatically without human escalation.
+2. **UCER (Unsafe Confident Error Rate):** `(Auto-Answered AND Wrong) / Total Queries`. Frequency of incorrect answers silently shown to users.
+3. **UCER_high:** UCER restricted to questions with confidence $\ge 0.80$.
+4. **ECE (Expected Calibration Error):** Partitioned across 10 equal-width bins $[0.0, 1.0]$.
+5. **Escalation Rate:** Fraction of total queries routed to Tier 2 escalation or human clinician review.
+6. **AUROC:** Area Under the Receiver Operating Characteristic curve for distinguishing correct from wrong model answers.
 
 ---
 
@@ -234,4 +268,4 @@ git remote -v
 # 3. Push main branch
 git push -u origin main
 ```
-*Note: Secrets (.env), virtual environment (.venv), local cache (.cache), raw datasets (data/raw), and database files (*.db) are strictly excluded by .gitignore.*
+*Note: Secrets (.env), virtual environment (.venv), local cache (.cache), raw datasets (data/raw), joblib models (*.joblib), and database files (*.db) are strictly excluded by .gitignore.*
