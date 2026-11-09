@@ -1,0 +1,81 @@
+system:
+  app_name: "ConfiRoute"
+  version: "0.1.0"
+  subtitle: "Confidence-Aware LLM Routing System"
+  is_mock_mode: true
+  seed: 42
+  database_path: "data/confiroute.db"
+  cache_dir: ".cache/llm_cache"
+
+models:
+  tier1:
+    provider: "mock" # options: "mock", "ollama"
+    model_name: "llama3.2:3b"
+    base_url: "http://localhost:11434"
+    supports_logprobs: true
+    reference_pricing:
+      input_per_1k_tokens: 0.00015
+      output_per_1k_tokens: 0.00060
+  tier2:
+    provider: "mock" # options: "mock", "groq"
+    model_name: "gpt-oss-120b"
+    base_url: "https://api.groq.com/openai/v1"
+    supports_logprobs: false
+    reference_pricing:
+      input_per_1k_tokens: 0.00059
+      output_per_1k_tokens: 0.00079
+
+confidence:
+  weights:
+    w_s1: 0.40  # Token probability
+    w_s2: 0.30  # Self-consistency
+    w_s3: 0.30  # Self-rated certainty
+  self_consistency:
+    samples: 3
+    temperature: 0.7
+  self_rating:
+    scale_max: 100
+
+routing:
+  thresholds:
+    high: 0.80          # Score >= 0.80 -> Direct Answer (Green)
+    low: 0.50           # 0.50 <= Score < 0.80 -> Tier 2 Escalation (Yellow); < 0.50 -> Human Review (Red)
+    tier2_accept: 0.80  # Required score to accept Tier 2 without human review
+  enable_risk_override: true
+
+dataset:
+  hf_repo: "openlifescienceai/medmcqa"
+  splits:
+    dev: 50
+    val: 200
+    test: 300
+    test_removed: 200
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+
+risk_rules:
+  keywords:
+    - "dose"
+    - "dosage"
+    - "mg/kg"
+    - "mcg"
+    - "units/kg"
+    - "overdose"
+    - "poisoning"
+    - "toxicity"
+    - "antidote"
+    - "cardiac arrest"
+    - "defibrillation"
+    - "ventricular fibrillation"
+    - "myocardial infarction"
+    - "emergency"
+    - "triage"
+    - "anaphylaxis"
+    - "epinephrine"
+    - "status epilepticus"
+    - "suicide"
+    - "self-harm"
+    - "contraindication in pregnancy"
+    - "teratogenic"
+    - "lethal dose"
+    - "resuscitation"
