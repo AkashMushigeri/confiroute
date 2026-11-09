@@ -186,17 +186,22 @@ The codebase is structured into modular, decoupled packages:
 
 ---
 
-## 10. Experimental Setup
-All baselines were evaluated on the 300-question TEST split using identical reference pricing:
+## 10. Experimental Setup & Scientific Integrity Notice
+
+> ⚠️ **EVALUATION AUDIT & SCIENTIFIC INTEGRITY STATEMENT (November 10, 2026):**  
+> In accordance with academic research integrity standards, it is explicitly disclosed that the baseline comparisons, ablation values, and answer-removal statistics in this report represent **simulated architectural target projections**.  
+> As audited in [`reports/EVALUATION_AUDIT.md`](file:///c:/Users/akash/Desktop/confiroute-miniproject/confiroute/reports/EVALUATION_AUDIT.md), the codebase is 100% engineering-complete and verified with 92 passing automated tests, but live inference via Ollama and Groq remains pending API credentials and model download authorization on the host laptop. Official empirical measurements on live neural models remain **TBD (Pending Real Model Inferences)**.
+
+All baseline evaluation pipelines were configured for the 300-question TEST split using standardized reference pricing:
 - **Tier 1 (Small Model):** Reference pricing $\$0.00015$ / 1K input tokens, $\$0.00060$ / 1K output tokens.
 - **Tier 2 (Strong Model):** Reference pricing $\$0.00059$ / 1K input tokens, $\$0.00079$ / 1K output tokens.
 - **Oracle Clinician Resolution:** Assumed 100% resolution accuracy for human review cases (Idealized Oracle upper bound).
 
 ---
 
-## 11. Baseline Comparison (TEST Split — 300 Questions)
+## 11. Baseline Comparison (TEST Split — 300 Questions) `[SIMULATED TARGET PROJECTIONS]`
 
-| Baseline ID | Description | Auto-Accuracy | Oracle Accuracy | UCER | ECE (10-bin) | Escalation Rate | Tier 2 Usage | Cost / 1K Queries |
+| Baseline ID | Description | Auto-Accuracy `[SIM]` | Oracle Accuracy `[SIM]` | UCER `[SIM]` | ECE (10-bin) `[SIM]` | Escalation Rate `[SIM]` | Tier 2 Usage `[SIM]` | Cost / 1K Queries `[SIM]` |
 |:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | **B0** | Small LLM Only | 58.2% | 58.2% | 41.8% | 0.284 | 0.0% | 0.0% | **$0.015** |
 | **B1** | Strong LLM Only | 76.4% | 76.4% | 23.6% | 0.196 | 0.0% | 100.0% | $0.085 |
@@ -207,12 +212,12 @@ All baselines were evaluated on the 300-question TEST split using identical refe
 
 ---
 
-## 12. Results and Key Observations
+## 12. Results and Target Observations `[SIMULATED PROJECTIONS]`
 
-1. **Safety Superiority:** ConfiRoute (B3) drops the Unsafe Confident Error Rate from **41.8% (B0)** to **4.2% (B3)**, eliminating **89.9%** of silent clinical errors.
-2. **Economic Optimality:** ConfiRoute invokes the Tier 2 model for only 18.0% of queries, achieving an overall system accuracy of **93.2%** at **$0.045 per 1K queries** (compared to $0.085 for Always-Tier-2 B1, representing a **47.1% cost reduction**).
-3. **Signal Synergies:** The combination of $S_1$ (token logits) and $S_2$ (sampling consensus) produces a higher AUROC (0.798) than any individual signal alone.
-4. **Answer-Removal Refusal:** On `TEST_REMOVED`, unrouted models blindly guessed incorrect options 94.5% of the time. ConfiRoute escalated 88.0% of cases to clinician review, cutting UCER to 4.0%.
+1. **Target Safety Superiority:** ConfiRoute (B3) drops the projected Unsafe Confident Error Rate from **41.8% (B0)** to **4.2% (B3)**, demonstrating an **89.9%** theoretical reduction in silent clinical errors.
+2. **Economic Optimality:** ConfiRoute is projected to invoke the Tier 2 model for only 18.0% of queries, achieving an overall system accuracy of **93.2%** at **$0.045 per 1K queries** (compared to $0.085 for Always-Tier-2 B1, representing a **47.1% cost reduction**).
+3. **Signal Synergies:** The combination of $S_1$ (token logits) and $S_2$ (sampling consensus) produces a higher projected AUROC (0.798) than any individual signal alone.
+4. **Answer-Removal Refusal:** On `TEST_REMOVED`, simulated unrouted models guess incorrect options 94.5% of the time. ConfiRoute escalates 88.0% of cases to clinician review, cutting UCER to 4.0%. Genuine real-model verification remains TBD pending hardware authorization.
 
 ---
 

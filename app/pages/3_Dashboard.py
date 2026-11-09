@@ -173,7 +173,7 @@ with tab_ops:
 
 with tab_bench:
     st.subheader("Formal Baseline Comparison (MedMCQA Benchmark)")
-    st.caption("Evaluated strictly across standardized dataset partitions with zero test-set leakage.")
+    st.info("🔬 **Evaluation Integrity Notice:** These benchmarks reflect simulated target projections and offline verification fixtures. Real model inference across all 300 test questions is pending local model download and API credentials. See `reports/EVALUATION_AUDIT.md` for details.")
 
     tbl_path = config.root_dir / "reports" / "tables" / "baseline_comparison.csv"
     if tbl_path.exists():
