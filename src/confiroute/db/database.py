@@ -200,6 +200,241 @@ def save_pipeline_execution(
         conn.close()
 
 
+def record_review_decision(
+    query_id: str,
+    reviewer_name: str,
+    decision: str,
+    corrected_answer: Optional[str] = None,
+    notes: Optional[str] = None,
+    custom_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Record reviewer action (approved, edited, rejected) and update case status in SQLite."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        with conn:
+            # Check existing route
+            route_row = conn.execute(
+                "SELECT id, status, ai_draft_answer FROM routes WHERE query_id = ? ORDER BY id DESC LIMIT 1",
+                (query_id,),
+            ).fetchone()
+
+            if not route_row:
+                raise ValueError(f"No routing record found for query_id '{query_id}'")
+
+            current_draft = route_row["ai_draft_answer"]
+            decision_norm = decision.strip().lower()
+
+            # Insert into reviews table
+            conn.execute(
+                """
+                INSERT INTO reviews (query_id, reviewer_name, decision, corrected_answer, notes)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    query_id,
+                    reviewer_name.strip(),
+                    decision_norm,
+                    corrected_answer.strip().upper() if corrected_answer else None,
+                    notes.strip() if notes else None,
+                ),
+            )
+
+            # Update routes status and final answer
+            if decision_norm == "approved":
+                new_status = "completed"
+                final_ans = current_draft
+            elif decision_norm == "edited":
+                new_status = "completed"
+                final_ans = corrected_answer.strip().upper() if corrected_answer else current_draft
+            elif decision_norm == "rejected":
+                new_status = "rejected"
+                final_ans = None
+            else:
+                raise ValueError(f"Invalid review decision '{decision}'. Expected: approved, edited, rejected.")
+
+            conn.execute(
+                """
+                UPDATE routes
+                SET status = ?, final_answer = ?
+                WHERE query_id = ?
+                """,
+                (new_status, final_ans, query_id),
+            )
+
+        return {
+            "query_id": query_id,
+            "decision": decision_norm,
+            "updated_status": new_status,
+            "final_answer": final_ans,
+            "reviewer_name": reviewer_name,
+        }
+    finally:
+        conn.close()
+
+
+def get_pending_reviews(limit: int = 50, custom_path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Retrieve cases awaiting human clinician review."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        cursor = conn.execute(
+            """
+            SELECT
+                q.id,
+                q.question,
+                q.options_json,
+                q.subject,
+                q.topic,
+                q.created_at,
+                s.s1,
+                s.s2,
+                s.s3,
+                s.combined,
+                r.route,
+                r.status,
+                r.color,
+                r.ai_draft_answer,
+                r.tier_used,
+                r.is_high_risk,
+                r.risk_reason,
+                r.reason
+            FROM queries q
+            JOIN routes r ON q.id = r.query_id
+            LEFT JOIN signals s ON q.id = s.query_id
+            WHERE r.status IN ('pending_human', 'pending_tier2')
+            ORDER BY q.created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = []
+        for r in cursor.fetchall():
+            item = dict(r)
+            try:
+                item["options"] = json.loads(item.get("options_json") or "{}")
+            except Exception:
+                item["options"] = {}
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def get_resolved_reviews(limit: int = 50, custom_path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Retrieve cases that have been reviewed by a human with reviewer notes and decisions."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        cursor = conn.execute(
+            """
+            SELECT
+                rv.id as review_id,
+                rv.query_id,
+                rv.reviewer_name,
+                rv.decision,
+                rv.corrected_answer,
+                rv.notes,
+                rv.reviewed_at,
+                q.question,
+                r.ai_draft_answer,
+                r.final_answer,
+                r.status as route_status,
+                r.reason
+            FROM reviews rv
+            JOIN queries q ON rv.query_id = q.id
+            JOIN routes r ON rv.query_id = r.query_id
+            ORDER BY rv.reviewed_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_query_result(query_id: str, custom_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """Fetch status and current outcome for a single query."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        cursor = conn.execute(
+            """
+            SELECT
+                q.id,
+                q.question,
+                q.options_json,
+                q.created_at,
+                s.s1,
+                s.s2,
+                s.s3,
+                s.combined,
+                r.route,
+                r.status,
+                r.color,
+                r.ai_draft_answer,
+                r.final_answer,
+                r.tier_used,
+                r.is_high_risk,
+                r.risk_reason,
+                r.reason,
+                c.equivalent_cost
+            FROM queries q
+            LEFT JOIN signals s ON q.id = s.query_id
+            LEFT JOIN routes r ON q.id = r.query_id
+            LEFT JOIN costs c ON q.id = c.query_id
+            WHERE q.id = ?
+            ORDER BY r.id DESC
+            LIMIT 1
+            """,
+            (query_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        res = dict(row)
+        try:
+            res["options"] = json.loads(res.get("options_json") or "{}")
+        except Exception:
+            res["options"] = {}
+        return res
+    finally:
+        conn.close()
+
+
+def get_system_stats(custom_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Calculate aggregate routing and review statistics."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        total_queries = conn.execute("SELECT count(*) as c FROM queries").fetchone()["c"]
+        direct_count = conn.execute("SELECT count(*) as c FROM routes WHERE route = 'direct'").fetchone()["c"]
+        tier2_count = conn.execute("SELECT count(*) as c FROM routes WHERE route = 'tier2'").fetchone()["c"]
+        human_count = conn.execute("SELECT count(*) as c FROM routes WHERE route = 'human'").fetchone()["c"]
+        pending_reviews = conn.execute("SELECT count(*) as c FROM routes WHERE status IN ('pending_human', 'pending_tier2')").fetchone()["c"]
+        approved_reviews = conn.execute("SELECT count(*) as c FROM reviews WHERE decision = 'approved'").fetchone()["c"]
+        edited_reviews = conn.execute("SELECT count(*) as c FROM reviews WHERE decision = 'edited'").fetchone()["c"]
+        rejected_reviews = conn.execute("SELECT count(*) as c FROM reviews WHERE decision = 'rejected'").fetchone()["c"]
+
+        return {
+            "total_queries": total_queries,
+            "routes": {
+                "direct": direct_count,
+                "tier2": tier2_count,
+                "human": human_count,
+            },
+            "reviews": {
+                "pending": pending_reviews,
+                "approved": approved_reviews,
+                "edited": edited_reviews,
+                "rejected": rejected_reviews,
+            },
+        }
+    finally:
+        conn.close()
+
+
 def get_recent_history(limit: int = 20, custom_path: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Retrieve recent queries with combined scores, routes, and reasons."""
     init_db(custom_path)

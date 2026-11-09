@@ -1,9 +1,12 @@
 """ConfiRoute — Confidence-Aware LLM Routing System.
 
-Streamlit Demonstration Web Application.
+Streamlit Demonstration Web Application with Multi-Provider Support
+and Clinician Human Review Escalation.
 """
 
 import sys
+import os
+import socket
 from pathlib import Path
 import streamlit as st
 
@@ -33,6 +36,17 @@ st.markdown(
     }
     .badge-demo {
         background-color: #1e3a8a;
+        color: #ffffff;
+        padding: 6px 14px;
+        border-radius: 20px;
+        font-weight: 700;
+        font-size: 0.85rem;
+        letter-spacing: 0.05em;
+        display: inline-block;
+        margin-bottom: 12px;
+    }
+    .badge-live {
+        background-color: #047857;
         color: #ffffff;
         padding: 6px 14px;
         border-radius: 20px;
@@ -87,6 +101,16 @@ st.markdown(
 init_db()
 config = get_config()
 
+
+def check_ollama_port(host="localhost", port=11434, timeout=0.4) -> bool:
+    """Quick socket check if Ollama is listening locally."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (socket.timeout, ConnectionRefusedError, OSError):
+        return False
+
+
 # Presets for Deterministic Testing of the 3 States
 PRESETS = {
     "Select a preset...": None,
@@ -136,36 +160,41 @@ PRESETS = {
     },
 }
 
-# Header Section
-col_head1, col_head2 = st.columns([3, 1])
-with col_head1:
-    st.markdown('<div class="badge-demo">DEMO MODE — SIMULATED AI OUTPUT</div>', unsafe_allow_html=True)
-    st.title("ConfiRoute")
-    st.subheader("Confidence-Aware LLM Routing System that Escalates Low-Certainty Cases to Humans")
-with col_head2:
-    st.metric("System Mode", "Mock Tier 1 (CPU)", "₹0 Budget")
-
-# Disclaimer
-st.markdown(
-    """
-    <div class="disclaimer-box">
-    <strong>⚠️ Research Prototype Disclaimer:</strong> This application is a research prototype built on exam-style medical QA benchmarks (MedMCQA).
-    It does <strong>NOT</strong> provide clinical advice. High-risk queries automatically escalate to clinician review.
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-# Sidebar: Architecture Overview & Configurations
+# Sidebar: Provider Selection & System Health
 with st.sidebar:
-    st.header("⚙️ Routing Architecture")
+    st.header("⚙️ Execution Mode")
+    provider_mode = st.radio(
+        "Provider Engine:",
+        ["Mock Engine (Offline / ₹0)", "Real AI (Ollama + Groq)"],
+        index=0,
+    )
+    is_real_mode = "Real AI" in provider_mode
+    active_provider = "real" if is_real_mode else "mock"
+
+    st.markdown("---")
+    st.subheader("Model Status")
+
+    ollama_live = check_ollama_port()
+    if ollama_live:
+        st.success("🟢 Local Ollama: Online (:11434)")
+    else:
+        st.info("⚪ Local Ollama: Offline (Mock fallback)")
+
+    groq_key = os.getenv("GROQ_API_KEY")
+    if groq_key and groq_key.strip():
+        st.success("🟢 Groq API: Key Configured")
+    else:
+        st.info("⚪ Groq API: Key Missing in .env")
+
+    st.markdown("---")
+    st.header("📐 Routing Thresholds")
     st.markdown(
         f"""
-        **Configured Thresholds:**
         - **Direct Answer (Green):** $\\ge {config.threshold_high:.2f}$
         - **Tier 2 Escalation (Yellow):** $[{config.threshold_low:.2f}, {config.threshold_high:.2f})$
+        - **Tier 2 Acceptance:** $\\ge {config.tier2_accept:.2f}$
         - **Human Review (Red):** $< {config.threshold_low:.2f}$
-        - **High-Risk Medical Rule:** Overrides all thresholds to Human Review.
+        - **High-Risk Medical Override:** Overrides all thresholds to Clinician Review.
 
         **Signal Weights:**
         - S1 Token Prob: `{config.weight_s1*100:.0f}%`
@@ -173,9 +202,30 @@ with st.sidebar:
         - S3 Self-Rated: `{config.weight_s3*100:.0f}%`
         """
     )
-    st.markdown("---")
-    st.subheader("Zero-Cost Specs")
-    st.caption("• Laptop: Intel CPU (8 GB RAM)\n• Tier 1: Local / Mock (0 cost)\n• Tier 2: Groq free tier compatible\n• Cache: Disk persistence active")
+    st.caption("• Review Queue available in sidebar: **1_Reviewer_Queue**")
+
+# Header Section
+col_head1, col_head2 = st.columns([3, 1])
+with col_head1:
+    if not is_real_mode:
+        st.markdown('<div class="badge-demo">DEMO MODE — SIMULATED AI OUTPUT</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="badge-live">LIVE MODE — REAL AI PROVIDERS</div>', unsafe_allow_html=True)
+    st.title("ConfiRoute")
+    st.subheader("Confidence-Aware LLM Routing System that Escalates Low-Certainty Cases to Humans")
+with col_head2:
+    st.metric("System Provider", "Mock Tier 1" if not is_real_mode else "Ollama / Groq", "₹0 Budget")
+
+# Disclaimer
+st.markdown(
+    """
+    <div class="disclaimer-box">
+    <strong>⚠️ Research Prototype Disclaimer:</strong> This application is an AI safety research prototype evaluated on exam-style medical QA benchmarks (MedMCQA).
+    It does <strong>NOT</strong> provide clinical advice. Low-confidence questions and high-risk medical topics automatically escalate to human clinician review.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # Preset Selector
 selected_preset_name = st.selectbox(
@@ -218,16 +268,15 @@ with st.form("medical_query_form"):
 if submitted:
     options_dict = {"A": opt_a, "B": opt_b, "C": opt_c, "D": opt_d}
 
-    with st.spinner("Calculating confidence signals and evaluating risk rules..."):
-        # Execute Routing
+    with st.spinner("Calculating confidence signals, checking safety rules, and routing..."):
         decision = route_query(
             question=q_input,
             options=options_dict,
             model_key="tier1",
             simulated_level=sim_level,
+            provider=active_provider,
         )
 
-        # Save to SQLite
         query_id = save_pipeline_execution(
             question=q_input,
             options=options_dict,
@@ -268,17 +317,22 @@ if submitted:
     # Answer Presentation Box
     st.subheader("💡 System Answer Status")
     if decision.route == "direct":
-        st.success(f"**Answer Released:** Option **{decision.final_answer}** — *{options_dict.get(decision.final_answer, '')}*")
+        st.success(
+            f"**Answer Released ({decision.tier_used.upper()}):** Option **{decision.final_answer}** — "
+            f"*{options_dict.get(decision.final_answer, '')}*"
+        )
     elif decision.route == "tier2":
         st.warning(
             f"**Pending Stronger Model:** The preliminary model chose Option **{decision.ai_draft_answer}**, "
-            "but confidence is below the direct answer threshold. Awaiting Tier 2 (Groq/gpt-oss-120b) re-evaluation."
+            "but confidence is below the direct answer threshold. Awaiting Tier 2 re-evaluation."
         )
     else:
         st.error(
             f"**Held for Human Review:** AI draft answer (Option **{decision.ai_draft_answer}**) is withheld from the user "
-            f"and routed to the clinician review queue. {'Reason: High-risk medical topic (' + str(decision.risk_reason) + ')' if decision.is_high_risk else 'Reason: Score below low threshold (' + f'{comb_val:.2f}' + ' < 0.50)'}."
+            f"and routed to the clinician review queue. "
+            f"{'Reason: High-risk medical topic (' + str(decision.risk_reason) + ')' if decision.is_high_risk else 'Reason: Confidence score below safety threshold.'}"
         )
+        st.info("👉 Clinicians can review and release this case from the **1_Reviewer_Queue** page in the left sidebar.")
 
     # 3 Confidence Signal Metrics
     st.subheader("📊 Individual Confidence Signals")
@@ -334,7 +388,7 @@ history = get_recent_history(limit=10)
 if history:
     import pandas as pd
     df_hist = pd.DataFrame(history)
-    display_cols = ["id", "question", "combined", "route", "color", "is_high_risk", "reason", "created_at"]
+    display_cols = ["id", "question", "combined", "route", "status", "final_answer", "is_high_risk", "reason", "created_at"]
     present_cols = [c for c in display_cols if c in df_hist.columns]
     st.dataframe(df_hist[present_cols], use_container_width=True)
 else:

@@ -5,6 +5,7 @@ into a single weighted confidence score with automatic weight redistribution.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
+import re
 from confiroute.config import get_config
 from confiroute.llm.base import ask_llm
 from confiroute.confidence.token_prob import compute_s1_token_prob
@@ -85,12 +86,29 @@ def format_mcq_prompt(question: str, options: Dict[str, str]) -> str:
     )
 
 
+def extract_option_letter(text: str, options: Dict[str, str]) -> str:
+    """Robustly extract selected option letter (A, B, C, D) from LLM output."""
+    if not text:
+        return list(options.keys())[0]
+    cleaned = text.strip()
+    first_char = cleaned[:1].upper()
+    if first_char in options:
+        return first_char
+    match = re.search(r"(?:option|answer)?\s*[\:\-\(\[]?\s*([A-D])\b", cleaned, re.IGNORECASE)
+    if match:
+        letter = match.group(1).upper()
+        if letter in options:
+            return letter
+    return list(options.keys())[0]
+
+
 def get_confidence(
     question: str,
     options: Dict[str, str],
     model_key: str = "tier1",
     simulated_level: Optional[str] = None,
     use_cache: bool = True,
+    provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute triple-signal confidence estimation for a medical question.
 
@@ -116,10 +134,9 @@ def get_confidence(
         logprobs=True,
         simulated_level=simulated_level,
         use_cache=use_cache,
+        provider=provider,
     )
-    primary_answer = t1_resp.text.strip().upper()[:1]
-    if primary_answer not in options:
-        primary_answer = list(options.keys())[0]
+    primary_answer = extract_option_letter(t1_resp.text, options)
 
     # Compute S1
     s1_score, norm_probs = compute_s1_token_prob(
@@ -137,8 +154,10 @@ def get_confidence(
         logprobs=False,
         simulated_level=simulated_level,
         use_cache=use_cache,
+        provider=provider,
     )
-    s2_score, majority_ans, count_dist = compute_s2_consistency(s2_resp.answers)
+    extracted_s2_answers = [extract_option_letter(a, options) for a in s2_resp.answers]
+    s2_score, majority_ans, count_dist = compute_s2_consistency(extracted_s2_answers)
 
     # 3. Self-rated certainty call (S3)
     s3_prompt = build_self_rating_prompt(question, primary_answer, options)
@@ -150,6 +169,7 @@ def get_confidence(
         logprobs=False,
         simulated_level=simulated_level,
         use_cache=use_cache,
+        provider=provider,
     )
     s3_score = parse_self_rating(s3_resp.text)
 
@@ -197,9 +217,9 @@ def get_confidence(
         "model_info": {
             "model_key": model_key,
             "model_name": t1_resp.model,
-            "provider": config.models.get(model_key, {}).get("provider", "mock"),
+            "provider": provider or config.models.get(model_key, {}).get("provider", "mock"),
         },
-        "is_mock": True,
+        "is_mock": t1_resp.is_mock,
         "tokens_used": {
             "prompt_tokens": total_prompt_tokens,
             "completion_tokens": total_completion_tokens,

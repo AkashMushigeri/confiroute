@@ -51,8 +51,8 @@ def test_routing_threshold_boundaries():
         assert dec_high.color == "green"
         assert dec_high.final_answer == dec_high.ai_draft_answer
 
-    # Force simulated medium
-    dec_med = route_query(q_safe, opts, simulated_level="medium", check_risk_flag=False)
+    # Force simulated medium (without immediate Tier 2 execution to test Tier 1 band mapping)
+    dec_med = route_query(q_safe, opts, simulated_level="medium", check_risk_flag=False, execute_tier2=False)
     if 0.50 <= dec_med.scores["combined"] < 0.80:
         assert dec_med.route == "tier2"
         assert dec_med.status == "pending_tier2"

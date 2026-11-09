@@ -6,6 +6,11 @@ from confiroute.db.database import (
     get_db_path,
     save_pipeline_execution,
     get_recent_history,
+    record_review_decision,
+    get_pending_reviews,
+    get_resolved_reviews,
+    get_query_result,
+    get_system_stats,
 )
 
 __all__ = [
@@ -14,4 +19,9 @@ __all__ = [
     "get_db_path",
     "save_pipeline_execution",
     "get_recent_history",
+    "record_review_decision",
+    "get_pending_reviews",
+    "get_resolved_reviews",
+    "get_query_result",
+    "get_system_stats",
 ]

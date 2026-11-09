@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from confiroute.config import get_config
 from confiroute.llm.cache import LLMDiskCache
 from confiroute.llm.pricing import compute_costs
+from confiroute.llm.providers import get_provider
 
 
 @dataclass
@@ -22,6 +23,7 @@ class LLMResponse:
     cost_equivalent: float
     is_mock: bool
     model: str
+    latency_ms: float = 0.0
     cached: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
@@ -49,30 +51,41 @@ def ask_llm(
     n: int = 1,
     logprobs: bool = False,
     use_cache: bool = True,
+    provider: Optional[str] = None,
     **kwargs: Any,
 ) -> LLMResponse:
     """Unified entry point for LLM interactions.
 
-    Works across Mock, Ollama, and Groq providers while enforcing
+    Works seamlessly across Mock, Ollama, and Groq providers while enforcing
     deterministic caching and equivalent-cost accounting.
     """
+    config = get_config()
+    model_cfg = config.models.get(model_key, {})
+
+    # Determine provider: parameter override -> config model provider -> mock fallback
+    chosen_provider = provider or model_cfg.get("provider", "mock")
+    if config.is_mock_mode and provider is None:
+        chosen_provider = "mock"
+
     cache = get_disk_cache()
 
+    cache_params = {
+        "provider": chosen_provider,
+        **kwargs,
+    }
+
     if use_cache:
-        cached_data = cache.get(model_key, prompt, temperature, n, logprobs, **kwargs)
+        cached_data = cache.get(model_key, prompt, temperature, n, logprobs, **cache_params)
         if cached_data is not None:
             return LLMResponse.from_dict(cached_data)
 
-    config = get_config()
-    model_cfg = config.models.get(model_key, {})
-    provider_name = model_cfg.get("provider", "mock")
-
-    # In Milestone 1, we use mock_provider.
-    # Future phases can seamlessly route to ollama_provider or groq_provider.
-    from confiroute.llm.mock_provider import generate_mock_response
-
-    raw_response = generate_mock_response(
+    provider_instance = get_provider(
+        provider_name=chosen_provider,
         model_key=model_key,
+        model_name=model_cfg.get("model_name"),
+    )
+
+    raw_response = provider_instance.generate(
         prompt=prompt,
         temperature=temperature,
         n=n,
@@ -83,26 +96,30 @@ def ask_llm(
     # Compute reference pricing
     real_cost, eq_cost = compute_costs(
         model_key=model_key,
-        tokens_prompt=raw_response["tokens_prompt"],
-        tokens_completion=raw_response["tokens_completion"],
+        tokens_prompt=raw_response.get("tokens_prompt", 0),
+        tokens_completion=raw_response.get("tokens_completion", 0),
     )
+
+    is_mock = raw_response.get("is_mock", chosen_provider == "mock")
+    model_display = model_cfg.get("model_name", chosen_provider)
 
     response = LLMResponse(
         text=raw_response["text"],
-        answers=raw_response["answers"],
+        answers=raw_response.get("answers", [raw_response["text"]]),
         logprobs=raw_response.get("logprobs"),
         mean_logprob=raw_response.get("mean_logprob"),
         self_rated_certainty=raw_response.get("self_rated_certainty"),
-        tokens_prompt=raw_response["tokens_prompt"],
-        tokens_completion=raw_response["tokens_completion"],
+        tokens_prompt=raw_response.get("tokens_prompt", 0),
+        tokens_completion=raw_response.get("tokens_completion", 0),
         cost_real=real_cost,
         cost_equivalent=eq_cost,
-        is_mock=True,
-        model=model_cfg.get("model_name", "mock-model"),
+        is_mock=is_mock,
+        model=model_display,
+        latency_ms=raw_response.get("latency_ms", 0.0),
         cached=False,
     )
 
     if use_cache:
-        cache.put(model_key, prompt, temperature, n, logprobs, response.to_dict(), **kwargs)
+        cache.put(model_key, prompt, temperature, n, logprobs, response.to_dict(), **cache_params)
 
     return response
