@@ -101,3 +101,61 @@ def test_api_stats():
     assert "total_queries" in stats
     assert "routes" in stats
     assert "reviews" in stats
+
+
+def test_api_ask_without_options():
+    payload = {
+        "question": "Which vitamin deficiency causes scurvy?",
+        "model_key": "tier1",
+        "provider": "mock",
+    }
+    resp = client.post("/ask", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "query_id" in data
+    assert data["case"] is not None
+    assert data["case"]["options"] is not None
+
+
+def test_api_cases_list():
+    resp = client.get("/cases?limit=10")
+    assert resp.status_code == 200
+    cases = resp.json()
+    assert isinstance(cases, list)
+    if cases:
+        c = cases[0]
+        assert "id" in c
+        assert "score" in c
+        assert "route" in c
+        assert "signals" in c
+
+
+def test_api_compare_systems():
+    payload = {
+        "question": "What is the recommended treatment for anaphylaxis?",
+        "options": {"A": "Intramuscular Epinephrine", "B": "Oral Diphenhydramine", "C": "Inhaled Albuterol", "D": "IV Hydrocortisone"},
+        "simulated_level": "high",
+        "provider": "mock",
+    }
+    resp = client.post("/compare", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "unrouted" in data
+    assert "confiroute" in data
+    assert data["unrouted"]["answer"] is not None
+    assert data["confiroute"]["score"] >= 0
+
+
+def test_api_alerts():
+    resp = client.get("/alerts")
+    assert resp.status_code == 200
+    alerts = resp.json()
+    assert isinstance(alerts, list)
+
+
+def test_api_export_csv():
+    resp = client.get("/export/csv")
+    assert resp.status_code == 200
+    assert "text/csv" in resp.headers.get("content-type", "")
+    assert "id,ts,question" in resp.text
+

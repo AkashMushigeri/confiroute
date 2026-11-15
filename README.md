@@ -92,12 +92,16 @@ confiroute/
 ├── pyproject.toml              # Editable package configuration
 ├── requirements.txt            # Lightweight, CPU-friendly dependencies
 │
-├── app/
-│   ├── Home.py                 # Streamlit web demo with traffic light meter
-│   └── pages/
-│       ├── 1_Reviewer_Queue.py # Clinician human-in-the-loop review interface
-│       ├── 2_Side_by_Side.py   # Side-by-side comparative demo (B0 vs B3)
-│       └── 3_Dashboard.py      # Real-time analytics dashboard & safety alerts
+├── frontend/                   # Modern React + Vite + Tailwind full-stack interface
+│   ├── src/
+│   │   ├── components/         # VerdictCard, Gauge, SignalBars, MetricCard, Charts, TriageBar, AlertBanner
+│   │   ├── pages/              # LandingPage, ChatPage, ReviewQueuePage, SideBySidePage, DashboardPage
+│   │   ├── lib/api.ts          # REST API service client connecting to FastAPI backend
+│   │   └── types.ts            # TypeScript data contracts (Case, AskInput, CompareResponse)
+│   ├── dist/                   # Production single-file bundle served by FastAPI
+│   └── package.json            # Node.js dependencies
+│
+├── app/                        # Legacy Streamlit web demo (Home.py, Reviewer_Queue, Side_by_Side, Dashboard)
 │
 ├── data/
 │   ├── raw/                    # Downloaded MedMCQA parquets (gitignored)
@@ -147,11 +151,11 @@ cd C:\Users\akash\Desktop\confiroute-miniproject\confiroute
 .\.venv\Scripts\Activate.ps1
 ```
 
-### 2. Run the Complete Automated Test Suite (92 Tests)
+### 2. Run the Complete Automated Test Suite (97 Tests)
 ```powershell
 pytest -v
 ```
-*All 92 unit and integration tests run offline on CPU in ~8 seconds.*
+*All 97 unit and integration tests run offline on CPU in ~5 seconds.*
 
 ### 3. Run Benchmark Baselines & Evaluations
 ```powershell
@@ -171,28 +175,39 @@ python -m confiroute.eval.plots
 python scripts/run_use_cases.py
 ```
 
-### 4. Start the FastAPI REST Backend Service
-In terminal 1:
+### 4. Launch the Unified Full-Stack Application
+Start the FastAPI service which automatically serves the integrated modern React frontend:
 ```powershell
 uvicorn confiroute.api.main:app --port 8000 --reload
+# Or simply execute: .\run_app.ps1
 ```
-- Interactive API Documentation (Swagger UI): `http://localhost:8000/docs`
-- Endpoints:
-  - `POST /ask`: Submit medical query for routing
-  - `GET /queue`: Retrieve pending cases for clinician review
-  - `POST /review/{query_id}`: Clinician approves, edits, or rejects draft
-  - `GET /result/{query_id}`: Check released final answer
-  - `GET /stats`: Real-time system analytics
+- **Unified Application:** Open `http://localhost:8000` in your browser.
+  - **Overview / Landing Page:** Interactive product tour, live routing simulation, pipeline stepper, signals animations, and threshold playground.
+  - **Ask a Question (Chat):** Live medical query interface with real-time confidence gauges, triple-signal breakdown, and routing verdicts.
+  - **Clinician Review Queue:** Live approval, editing, and rejection workflow with audit trail and CSV download.
+  - **Side-by-Side Comparison:** Baseline B0 (standard unrouted LLM) vs ConfiRoute B3 safety layer.
+  - **Analytics Dashboard:** Live KPIs, triage breakdown bar, confidence score histogram, rolling escalation line, and safety alerts.
+- **Interactive API Documentation (Swagger UI):** `http://localhost:8000/docs`
+- **Connected Endpoints:**
+  - `POST /ask`: Submit medical query with optional choices for confidence routing.
+  - `GET /queue`: Retrieve pending cases awaiting clinician review.
+  - `POST /review/{query_id}`: Record clinician approval, correction, or rejection.
+  - `GET /cases`: Retrieve all historical cases and decisions for dashboard visualizations.
+  - `POST /compare`: Run comparative evaluation (Unrouted vs ConfiRoute).
+  - `GET /stats`: Retrieve real-time aggregate routing metrics.
+  - `GET /alerts`: Retrieve active operational and safety alerts.
+  - `POST /seed`: Seed real MedMCQA benchmark cases into SQLite database.
+  - `GET /export/csv`: Download full audit log as CSV.
 
-### 5. Launch the Streamlit Multi-Page Web Application
-In terminal 2:
+### 5. Frontend Development Server (Optional)
+To run the React development server with hot-module reloading:
 ```powershell
-streamlit run app/Home.py
+cd frontend
+npm install
+npm run dev
 ```
-- **Main Demo:** `http://localhost:8501` (Traffic light meter, deterministic presets).
-- **Clinician Review Queue:** `http://localhost:8501/Reviewer_Queue` (Approve/Edit/Reject interface).
-- **Side-by-Side Comparison:** `http://localhost:8501/Side_by_Side` (Ordinary LLM vs ConfiRoute).
-- **Analytics Dashboard:** `http://localhost:8501/Dashboard` (Live KPIs, alerts banner, benchmark charts).
+- Dev interface accessible at `http://localhost:5173` (proxies/connects to FastAPI on port 8000).
+- Production build: `npm run build` compiles into `frontend/dist/index.html`.
 
 ---
 

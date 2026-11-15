@@ -223,7 +223,12 @@ def record_review_decision(
                 raise ValueError(f"No routing record found for query_id '{query_id}'")
 
             current_draft = route_row["ai_draft_answer"]
-            decision_norm = decision.strip().lower()
+            decision_raw = decision.strip().lower()
+            decision_norm = {"approve": "approved", "edit": "edited", "reject": "rejected"}.get(decision_raw, decision_raw)
+
+            corrected_clean = corrected_answer.strip() if corrected_answer else None
+            if corrected_clean and len(corrected_clean) == 1:
+                corrected_clean = corrected_clean.upper()
 
             # Insert into reviews table
             conn.execute(
@@ -235,7 +240,7 @@ def record_review_decision(
                     query_id,
                     reviewer_name.strip(),
                     decision_norm,
-                    corrected_answer.strip().upper() if corrected_answer else None,
+                    corrected_clean,
                     notes.strip() if notes else None,
                 ),
             )
@@ -246,7 +251,7 @@ def record_review_decision(
                 final_ans = current_draft
             elif decision_norm == "edited":
                 new_status = "completed"
-                final_ans = corrected_answer.strip().upper() if corrected_answer else current_draft
+                final_ans = corrected_clean if corrected_clean else current_draft
             elif decision_norm == "rejected":
                 new_status = "rejected"
                 final_ans = None
@@ -365,6 +370,8 @@ def get_query_result(query_id: str, custom_path: Optional[Path] = None) -> Optio
                 q.id,
                 q.question,
                 q.options_json,
+                q.subject,
+                q.topic,
                 q.created_at,
                 s.s1,
                 s.s2,
@@ -379,13 +386,19 @@ def get_query_result(query_id: str, custom_path: Optional[Path] = None) -> Optio
                 r.is_high_risk,
                 r.risk_reason,
                 r.reason,
-                c.equivalent_cost
+                c.equivalent_cost,
+                rev.decision AS review_decision,
+                rev.corrected_answer,
+                rev.reviewer_name,
+                rev.notes,
+                rev.reviewed_at
             FROM queries q
             LEFT JOIN signals s ON q.id = s.query_id
             LEFT JOIN routes r ON q.id = r.query_id
             LEFT JOIN costs c ON q.id = c.query_id
+            LEFT JOIN reviews rev ON q.id = rev.query_id
             WHERE q.id = ?
-            ORDER BY r.id DESC
+            ORDER BY rev.id DESC, r.id DESC
             LIMIT 1
             """,
             (query_id,),
@@ -590,7 +603,10 @@ def get_dashboard_query_records(
                 c.completion_tokens,
                 c.total_tokens,
                 rev.decision AS review_decision,
-                rev.corrected_answer
+                rev.corrected_answer,
+                rev.reviewer_name,
+                rev.notes,
+                rev.reviewed_at
             FROM queries q
             LEFT JOIN signals s ON q.id = s.query_id
             LEFT JOIN routes r ON q.id = r.query_id
