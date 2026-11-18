@@ -1,16 +1,9 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import {
   ChevronDown,
-  CheckCircle2,
-  AlertTriangle,
-  Clock,
-  Cpu,
   Layers,
-  ShieldCheck,
   UserCheck,
   Info,
-  Sparkles,
-  ArrowRight,
   ShieldAlert,
 } from "lucide-react";
 import type { Case } from "../types";
@@ -171,66 +164,69 @@ export default function RoutingTimeline({ caseData, onOpenReview }: RoutingTimel
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* 6-Stage Timeline Flow */}
+            {/* Dynamic Event Stages Flow */}
             <div className="lg:col-span-8 space-y-4">
               <h4 className="text-xs font-mono uppercase tracking-wider text-[#777267] font-semibold mb-3">
-                Execution Stages & Safety Gates
+                Actual Processing Events ({isEscalated ? "Escalated Workflow" : "Direct / Safety Workflow"})
               </h4>
 
-              {/* Stage 1: Query Ingestion */}
+              {/* Event 1: Query Received & Safety Screening */}
               <div className="flex items-start gap-3 relative pb-4 border-l-2 border-[#E8E2D5] ml-3 pl-4">
                 <span className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#3E7B54] text-white flex items-center justify-center text-[9px] font-bold">
                   1
                 </span>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-[#292720]">Query Received & Risk Scan</span>
+                    <span className="text-xs font-semibold text-[#292720]">Query Received & Safety Screen</span>
                     <span className="text-[10px] font-mono text-[#8C877B]">Domain: {caseData.subject || "General"}</span>
                   </div>
                   <p className="text-xs text-[#777267] mt-0.5 leading-relaxed">
-                    Query analyzed for clinical contraindications and critical dosage terms.
+                    Clinical inquiry analyzed for emergency triage, dangerous drug dosages, and high-risk terms.
                     {isHighRisk && (
                       <span className="text-[#BD4C3D] font-medium block mt-0.5">
-                        Rule triggered: "{caseData.risk_reason || "Critical medication dosage detected"}".
+                        ⚠ Safety Rule Triggered: "{caseData.risk_reason || "Critical medication dosage detected"}".
                       </span>
                     )}
                   </p>
                 </div>
               </div>
 
-              {/* Stage 2: Initial Model Generation */}
+              {/* Event 2: Initial Model Selection & Response Generated */}
               <div className="flex items-start gap-3 relative pb-4 border-l-2 border-[#E8E2D5] ml-3 pl-4">
                 <span className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#B79A68] text-white flex items-center justify-center text-[9px] font-bold">
                   2
                 </span>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-[#292720]">Initial Model Generation</span>
-                    <span className="text-[10px] font-mono text-[#8C877B]">llama 3.2 3B</span>
+                    <span className="text-xs font-semibold text-[#292720]">Initial Model Selected & Draft Generated</span>
+                    <span className="text-[10px] font-mono text-[#8C877B]">{initialModel}</span>
                   </div>
                   <p className="text-xs text-[#777267] mt-0.5 leading-relaxed">
-                    Lightweight tier generated draft answer with logprob telemetry.
+                    Primary candidate draft answer generated: <span className="font-medium text-[#292720]">"{caseData.tier1_answer || "Draft generated"}"</span>.
                   </p>
                 </div>
               </div>
 
-              {/* Stage 3: Confidence Multi-Signal Computation */}
+              {/* Event 3: Confidence Multi-Signal Computation */}
               <div className="flex items-start gap-3 relative pb-4 border-l-2 border-[#E8E2D5] ml-3 pl-4">
                 <span className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#B79A68] text-white flex items-center justify-center text-[9px] font-bold">
                   3
                 </span>
                 <div className="w-full">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-[#292720]">Confidence Evaluation Performed</span>
-                    <span className="text-xs font-mono font-bold text-[#C67D26]">Score: {score.toFixed(2)}</span>
+                    <span className="text-xs font-semibold text-[#292720]">Multi-Signal Confidence Evaluation</span>
+                    <span className="text-xs font-mono font-bold text-[#C67D26]">Combined: {score.toFixed(2)}</span>
                   </div>
 
                   {/* 3-Signal Breakdown Cards */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2">
-                    <div className="p-2 rounded-lg bg-[#FAF8F5] border border-[#E8E2D5]">
+                    {/* Signal 1: Token Probability */}
+                    <div className="p-2.5 rounded-lg bg-[#FAF8F5] border border-[#E8E2D5]">
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="text-[#777267]">Token Probs (s₁)</span>
-                        <span className="font-mono font-semibold text-[#292720]">{s1.toFixed(2)}</span>
+                        <span className="font-mono font-semibold text-[#292720]">
+                          {s1 > 0 ? s1.toFixed(2) : "N/A"}
+                        </span>
                       </div>
                       <div className="mt-1 h-1.5 w-full bg-[#E8E2D5] rounded-full overflow-hidden">
                         <div
@@ -238,10 +234,13 @@ export default function RoutingTimeline({ caseData, onOpenReview }: RoutingTimel
                           style={{ width: `${Math.min(100, Math.round(s1 * 100))}%` }}
                         />
                       </div>
-                      <span className="text-[9px] text-[#A8A296] font-mono mt-0.5 block">Weight: 40%</span>
+                      <span className="text-[9px] text-[#A8A296] font-mono mt-0.5 block">
+                        {s1 > 0 ? "Weight: 40% (Logprobs)" : "Provider: Not exposed"}
+                      </span>
                     </div>
 
-                    <div className="p-2 rounded-lg bg-[#FAF8F5] border border-[#E8E2D5]">
+                    {/* Signal 2: Self-Consistency */}
+                    <div className="p-2.5 rounded-lg bg-[#FAF8F5] border border-[#E8E2D5]">
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="text-[#777267]">Consistency (s₂)</span>
                         <span className="font-mono font-semibold text-[#292720]">{s2.toFixed(2)}</span>
@@ -252,10 +251,13 @@ export default function RoutingTimeline({ caseData, onOpenReview }: RoutingTimel
                           style={{ width: `${Math.min(100, Math.round(s2 * 100))}%` }}
                         />
                       </div>
-                      <span className="text-[9px] text-[#A8A296] font-mono mt-0.5 block">Weight: 30%</span>
+                      <span className="text-[9px] text-[#A8A296] font-mono mt-0.5 block">
+                        Weight: 30% (Sample agreement)
+                      </span>
                     </div>
 
-                    <div className="p-2 rounded-lg bg-[#FAF8F5] border border-[#E8E2D5]">
+                    {/* Signal 3: Self-Rated Certainty */}
+                    <div className="p-2.5 rounded-lg bg-[#FAF8F5] border border-[#E8E2D5]">
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="text-[#777267]">Self-Rating (s₃)</span>
                         <span className="font-mono font-semibold text-[#292720]">{s3.toFixed(2)}</span>
@@ -266,22 +268,24 @@ export default function RoutingTimeline({ caseData, onOpenReview }: RoutingTimel
                           style={{ width: `${Math.min(100, Math.round(s3 * 100))}%` }}
                         />
                       </div>
-                      <span className="text-[9px] text-[#A8A296] font-mono mt-0.5 block">Weight: 30%</span>
+                      <span className="text-[9px] text-[#A8A296] font-mono mt-0.5 block" title="Self-rating reflects internal estimate, not proof of correctness">
+                        Weight: 30% (Model introspection)
+                      </span>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Stage 4: Routing Decision Made */}
+              {/* Event 4: Routing Decision Made */}
               <div className="flex items-start gap-3 relative pb-4 border-l-2 border-[#E8E2D5] ml-3 pl-4">
                 <span className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#25241F] text-white flex items-center justify-center text-[9px] font-bold">
                   4
                 </span>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-[#292720]">Routing Decision Made</span>
+                    <span className="text-xs font-semibold text-[#292720]">Routing Decision</span>
                     <span className="text-[10px] font-mono text-[#8C877B]">
-                      Threshold check: ≥0.80 direct, 0.50–0.79 escalate
+                      {route === "direct" ? "High Certainty Path" : route === "tier2" ? "Escalation Path" : "Safety Gate"}
                     </span>
                   </div>
                   <p className="text-xs text-[#777267] mt-0.5 leading-relaxed">
@@ -290,61 +294,84 @@ export default function RoutingTimeline({ caseData, onOpenReview }: RoutingTimel
                 </div>
               </div>
 
-              {/* Stage 5: Escalation or Human Review */}
-              <div className="flex items-start gap-3 relative pb-4 border-l-2 border-[#E8E2D5] ml-3 pl-4">
-                <span className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#C5A878] text-white flex items-center justify-center text-[9px] font-bold">
-                  5
-                </span>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-[#292720]">
-                      {isEscalated
-                        ? "Tier 2 Escalation Executed"
-                        : route === "human"
-                        ? "Safety Gate: Clinician Review"
-                        : "Escalation Not Required"}
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#777267] mt-0.5 leading-relaxed">
-                    {isEscalated
-                      ? `Re-evaluated with higher-capacity model (${strongerModel}).`
-                      : route === "human"
-                      ? "Uncertainty below threshold or critical safety rule active. Answer routed to clinical review queue."
-                      : "Direct pathway satisfied with high statistical certainty."}
-                  </p>
-
-                  {/* Clinician Review Details if resolved */}
-                  {hasReview && caseData.review && (
-                    <div className="mt-2 p-2.5 rounded-lg bg-[#FAF7F2] border border-[#E8E2D5] text-xs">
-                      <div className="font-semibold text-[#292720]">
-                        Reviewed by {caseData.review.reviewer}:{" "}
-                        <span className="capitalize">{caseData.review.decision}</span>
-                      </div>
-                      {caseData.review.note && (
-                        <p className="text-[#656056] text-[11px] mt-0.5 italic">
-                          "{caseData.review.note}"
-                        </p>
-                      )}
+              {/* Event 5: Stronger Model Escalation (Displayed ONLY if escalation occurred!) */}
+              {isEscalated && (
+                <div className="flex items-start gap-3 relative pb-4 border-l-2 border-[#E8E2D5] ml-3 pl-4">
+                  <span className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#C5A878] text-white flex items-center justify-center text-[9px] font-bold">
+                    5
+                  </span>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-[#292720]">Stronger Model Escalation Executed</span>
+                      <span className="text-[10px] font-mono text-[#C67D26]">{strongerModel}</span>
                     </div>
-                  )}
-
-                  {/* If still pending review, offer quick review modal */}
-                  {isPendingReview && onOpenReview && (
-                    <button
-                      onClick={() => onOpenReview(caseData)}
-                      className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#25241F] text-white text-xs font-semibold hover:bg-[#38362E] transition-all cursor-pointer shadow-xs"
-                    >
-                      <UserCheck className="w-3.5 h-3.5 text-[#C5A878]" />
-                      <span>Review as Clinician</span>
-                    </button>
-                  )}
+                    <p className="text-xs text-[#777267] mt-0.5 leading-relaxed">
+                      Escalated to higher-capacity LLM for multi-sample re-evaluation. Second-stage score:{" "}
+                      <span className="font-mono font-semibold">
+                        {caseData.tier2_score != null ? caseData.tier2_score.toFixed(2) : score.toFixed(2)}
+                      </span>.
+                      {caseData.tier2_answer && (
+                        <span className="block mt-0.5 text-[#292720] font-medium">
+                          Tier 2 Response: "{caseData.tier2_answer}"
+                        </span>
+                      )}
+                    </p>
+                  </div>
                 </div>
-              </div>
+              )}
 
-              {/* Stage 6: Final Response Delivered */}
+              {/* Event 6: Human Clinical Review (Displayed ONLY if routed to human or reviewed!) */}
+              {(isPendingReview || hasReview) && (
+                <div className="flex items-start gap-3 relative pb-4 border-l-2 border-[#E8E2D5] ml-3 pl-4">
+                  <span className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#BD4C3D] text-white flex items-center justify-center text-[9px] font-bold">
+                    {isEscalated ? "6" : "5"}
+                  </span>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-[#292720]">Human Clinician Safety Review</span>
+                      <span className="text-[10px] font-mono text-[#BD4C3D]">
+                        {hasReview ? "Resolved" : "Held in Review Queue"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#777267] mt-0.5 leading-relaxed">
+                      {isHighRisk
+                        ? `Held for clinical review: ${caseData.risk_reason || "high-risk medical topic"}.`
+                        : "Low statistical certainty detected. Answer withheld from user pending human authorization."}
+                    </p>
+
+                    {/* Clinician Review Details if already resolved */}
+                    {hasReview && caseData.review && (
+                      <div className="mt-2 p-2.5 rounded-lg bg-[#FAF7F2] border border-[#E8E2D5] text-xs">
+                        <div className="font-semibold text-[#292720]">
+                          Audited by {caseData.review.reviewer}:{" "}
+                          <span className="capitalize text-[#3E7B54] font-bold">{caseData.review.decision}</span>
+                        </div>
+                        {caseData.review.note && (
+                          <p className="text-[#656056] text-[11px] mt-0.5 italic">
+                            "{caseData.review.note}"
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* If still pending review, offer quick review modal */}
+                    {isPendingReview && onOpenReview && (
+                      <button
+                        onClick={() => onOpenReview(caseData)}
+                        className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#25241F] text-white text-xs font-semibold hover:bg-[#38362E] transition-all cursor-pointer shadow-xs"
+                      >
+                        <UserCheck className="w-3.5 h-3.5 text-[#C5A878]" />
+                        <span>Review as Clinician</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Event Final: Final Response Outcome */}
               <div className="flex items-start gap-3 relative ml-3 pl-4">
                 <span className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#3E7B54] text-white flex items-center justify-center text-[9px] font-bold">
-                  6
+                  ✓
                 </span>
                 <div>
                   <div className="flex items-center gap-2">
@@ -353,7 +380,7 @@ export default function RoutingTimeline({ caseData, onOpenReview }: RoutingTimel
                   </div>
                   <p className="text-xs text-[#777267] mt-0.5 leading-relaxed">
                     {finalStatus === "Draft Held for Safety"
-                      ? "Answer draft is withheld from the end-user pending human clinical audit."
+                      ? "Answer draft is securely withheld from the end-user pending human clinician audit."
                       : "Verified answer delivered to chat workspace with transparent routing provenance."}
                   </p>
                 </div>
@@ -368,13 +395,13 @@ export default function RoutingTimeline({ caseData, onOpenReview }: RoutingTimel
                 </h5>
                 <ConfidenceGauge score={score} band={band} size={150} showLabel={true} />
 
-                {/* Disclaimer note */}
+                {/* Scientifically Honest Disclaimer note */}
                 <div className="mt-4 p-2.5 rounded-lg bg-[#FFFEFC] border border-[#E8E2D5] text-[11px] text-[#777267] leading-relaxed">
                   <div className="flex items-center gap-1 font-semibold text-[#292720] mb-0.5">
                     <Info className="w-3 h-3 text-[#B79A68]" />
-                    <span>Confidence Notice</span>
+                    <span>Scientific Notice</span>
                   </div>
-                  Confidence evaluates token probability and consistency. It does not imply infallible mathematical truth.
+                  Confidence is an empirical uncertainty estimate combining token probability and consistency. It is not an absolute proof of factual truth. Self-rated certainty reflects model introspection and is not treated as verification.
                 </div>
               </div>
 

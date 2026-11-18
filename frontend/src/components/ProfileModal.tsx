@@ -1,5 +1,4 @@
-import React from "react";
-import { X, UserCheck, ShieldCheck, Mail, Building, Clock, LogOut } from "lucide-react";
+import { X, UserCheck, Mail, Building, Clock, LogOut } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
 interface ProfileModalProps {

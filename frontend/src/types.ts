@@ -52,6 +52,9 @@ export interface CompareResponse {
 
 export interface SystemStats {
   total_queries: number;
+  high_confidence?: number;
+  stronger_model_escalations?: number;
+  human_escalations?: number;
   routes: {
     direct: number;
     tier2: number;
@@ -63,7 +66,39 @@ export interface SystemStats {
     edited: number;
     rejected: number;
   };
+  model_usage?: {
+    tier1: number;
+    tier2: number;
+  };
+  cost_summary?: {
+    total_tokens: number;
+    total_equivalent_cost: number;
+    avg_latency_ms: number;
+    currency: string;
+  };
 }
+
+export interface ReviewHistoryItem {
+  review_id: number;
+  query_id: string;
+  reviewer_name: string;
+  decision: "approved" | "edited" | "rejected";
+  corrected_answer: string | null;
+  notes: string | null;
+  reviewed_at: string;
+  question: string;
+  options: Record<string, string> | null;
+  subject: string;
+  route: Route;
+  status: string;
+  color: Band;
+  score: number;
+  tier1_answer: string | null;
+  final_answer: string | null;
+  risk_flag: boolean;
+  risk_reason: string | null;
+}
+
 
 export interface AlertItem {
   id?: number;

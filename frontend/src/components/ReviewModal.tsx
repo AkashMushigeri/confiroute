@@ -20,6 +20,7 @@ export default function ReviewModal({
 
   const [decision, setDecision] = useState<"approve" | "edit" | "reject">("approve");
   const [editedAnswer, setEditedAnswer] = useState(caseData.tier1_answer || "");
+  const [currentReviewer, setCurrentReviewer] = useState(reviewerName || "Dr. Sarah Chen");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +41,7 @@ export default function ReviewModal({
         decision,
         decision === "edit" ? editedAnswer.trim() : null,
         notes.trim(),
-        reviewerName || "Dr. Sarah Chen"
+        currentReviewer || "Dr. Sarah Chen"
       );
       onSuccess(caseData.id, resp.decision, resp.final_answer);
       onClose();
@@ -189,6 +190,21 @@ export default function ReviewModal({
             </div>
           )}
 
+          {/* Reviewer Assignment */}
+          <div>
+            <label className="block text-xs font-semibold text-[#4A473E] tracking-wider uppercase mb-1.5">
+              Assigned Clinician Auditor
+            </label>
+            <input
+              type="text"
+              value={currentReviewer}
+              onChange={(e) => setCurrentReviewer(e.target.value)}
+              placeholder="e.g. Dr. Sarah Chen"
+              required
+              className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#E8E2D5] rounded-xl text-xs text-[#292720] focus:outline-none focus:ring-2 focus:ring-[#C5A878]"
+            />
+          </div>
+
           {/* Audit Notes */}
           <div>
             <label className="block text-xs font-semibold text-[#4A473E] tracking-wider uppercase mb-1.5">
@@ -205,8 +221,8 @@ export default function ReviewModal({
 
           {/* Reviewer signature notice */}
           <div className="text-[11px] text-[#8C877B] flex items-center justify-between pt-1">
-            <span>Signing Reviewer: <strong>{reviewerName || "Dr. Sarah Chen"}</strong></span>
-            <span className="font-mono text-[#3E7B54]">Audited</span>
+            <span>Signing Reviewer: <strong>{currentReviewer || "Dr. Sarah Chen"}</strong></span>
+            <span className="font-mono text-[#3E7B54]">Authenticated Audit</span>
           </div>
 
           {/* Submit Actions */}

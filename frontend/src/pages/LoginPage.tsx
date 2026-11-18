@@ -48,7 +48,7 @@ export default function LoginPage() {
 
   const fillDemoCredentials = () => {
     setEmail("clinician@confiroute.ai");
-    setPassword("confiroute2026");
+    setPassword("Clinical2026!");
     setErrorMessage(null);
   };
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import LoginPage from "./pages/LoginPage";
 import ChatWorkspace from "./pages/ChatWorkspace";
@@ -26,6 +26,12 @@ function MainApp() {
 
   // Clinician auditor name
   const [reviewerName, setReviewerName] = useState(user?.name || "Dr. Sarah Chen");
+
+  useEffect(() => {
+    if (user?.name) {
+      setReviewerName(user.name);
+    }
+  }, [user]);
 
   // Cases loaded from backend
   const [cases, setCases] = useState<Case[]>([]);
@@ -67,6 +73,50 @@ function MainApp() {
     }
   }, [sessions]);
 
+  // Sync conversations from backend SQLite when authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      api.getConversations().then(async (serverConvs) => {
+        if (serverConvs && serverConvs.length > 0) {
+          try {
+            // Load messages for the active conversation
+            const activeId = currentSessionId || serverConvs[0].id;
+            const fullActive = await api.getConversation(activeId).catch(() => null);
+
+            setSessions((prev) => {
+              const merged = [...prev];
+              for (const sc of serverConvs) {
+                const existingIdx = merged.findIndex((m) => m.id === sc.id);
+                if (existingIdx === -1) {
+                  merged.push({
+                    id: sc.id,
+                    title: sc.title,
+                    subject: sc.subject,
+                    createdAt: sc.updated_at,
+                    updatedAt: sc.updated_at,
+                    messages: fullActive && fullActive.id === sc.id ? fullActive.messages : [],
+                  });
+                } else if (fullActive && fullActive.id === sc.id && fullActive.messages.length > 0) {
+                  merged[existingIdx] = {
+                    ...merged[existingIdx],
+                    messages: fullActive.messages,
+                  };
+                }
+              }
+              return merged;
+            });
+
+            if (!currentSessionId) {
+              setCurrentSessionId(serverConvs[0].id);
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }).catch((e) => console.warn("Failed to retrieve server conversations:", e));
+    }
+  }, [isAuthenticated, currentSessionId]);
+
   // Load existing cases from backend SQLite
   const reloadCases = useCallback(async () => {
     try {
@@ -95,6 +145,24 @@ function MainApp() {
       messages: [],
     };
 
+  // Select session and load messages from backend if needed
+  const handleSelectSession = async (id: string) => {
+    setCurrentSessionId(id);
+    const existing = sessions.find((s) => s.id === id);
+    if (!existing || existing.messages.length === 0) {
+      try {
+        const fullConv = await api.getConversation(id);
+        if (fullConv && fullConv.messages.length > 0) {
+          setSessions((prev) =>
+            prev.map((s) => (s.id === id ? { ...s, messages: fullConv.messages } : s))
+          );
+        }
+      } catch {
+        // ignore
+      }
+    }
+  };
+
   // Create new session
   const handleNewSession = () => {
     const newId = `sess_${Date.now()}`;
@@ -108,10 +176,12 @@ function MainApp() {
     };
     setSessions((prev) => [newSession, ...prev]);
     setCurrentSessionId(newId);
+    api.saveConversation(newId, "New Clinical Inquiry", "General Medicine").catch(() => {});
   };
 
   // Delete session
   const handleDeleteSession = (id: string) => {
+    api.deleteConversation(id).catch(() => {});
     setSessions((prev) => {
       const next = prev.filter((s) => s.id !== id);
       if (next.length === 0) {
@@ -124,6 +194,7 @@ function MainApp() {
           messages: [],
         };
         setCurrentSessionId(replacement.id);
+        api.saveConversation(replacement.id, replacement.title, replacement.subject).catch(() => {});
         return [replacement];
       }
       if (currentSessionId === id) {
@@ -161,18 +232,24 @@ function MainApp() {
       subject,
     };
 
+    // Update conversation title on backend if it's the first message
+    const isFirst = currentSession.messages.length === 0;
+    const sessionTitle = isFirst
+      ? question.length > 36
+        ? `${question.substring(0, 36)}...`
+        : question
+      : currentSession.title;
+
+    api.saveConversation(currentSession.id, sessionTitle, subject).catch(() => {});
+    api.saveConversationMessage(currentSession.id, userMessage).catch(() => {});
+
     // Add user message immediately
     setSessions((prev) =>
       prev.map((s) => {
         if (s.id === currentSession.id) {
-          const isFirstMessage = s.messages.length === 0;
           return {
             ...s,
-            title: isFirstMessage
-              ? question.length > 36
-                ? `${question.substring(0, 36)}...`
-                : question
-              : s.title,
+            title: sessionTitle,
             subject,
             updatedAt: new Date().toISOString(),
             messages: [...s.messages, userMessage],
@@ -203,6 +280,8 @@ function MainApp() {
         caseData: resultCase,
       };
 
+      api.saveConversationMessage(currentSession.id, aiMessage).catch(() => {});
+
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id === currentSession.id) {
@@ -225,6 +304,7 @@ function MainApp() {
         role: "assistant",
         content: `Error: ${err.message || "Unable to reach ConfiRoute backend."}`,
         timestamp: new Date().toISOString(),
+        error: err.message || "Failed to process inference with backend service.",
       };
 
       setSessions((prev) =>
@@ -343,7 +423,7 @@ function MainApp() {
         setCurrentView={setCurrentView}
         sessions={sessions}
         currentSessionId={currentSession.id}
-        onSelectSession={setCurrentSessionId}
+        onSelectSession={handleSelectSession}
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
         onSelectPreset={handleSelectPreset}

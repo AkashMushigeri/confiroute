@@ -1,16 +1,10 @@
-import React, { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   Send,
   Loader2,
   Sparkles,
   ShieldCheck,
   ChevronDown,
-  Layers,
-  Cpu,
-  UserCheck,
-  RotateCcw,
-  PlusCircle,
-  Download,
   Trash2,
   Menu,
 } from "lucide-react";
@@ -48,7 +42,6 @@ export default function ChatWorkspace({
   const [showOptions, setShowOptions] = useState(false);
   const [options, setOptions] = useState({ A: "", B: "", C: "", D: "" });
   const [subject, setSubject] = useState(session.subject || "General Medicine");
-  const [simLevel, setSimLevel] = useState<string>("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -92,8 +85,7 @@ export default function ChatWorkspace({
             D: options.D.trim(),
           }
         : null,
-      subject,
-      simLevel || undefined
+      subject
     );
 
     setInputText("");
@@ -307,18 +299,6 @@ export default function ChatWorkspace({
                 <option value="Physiology">Physiology</option>
                 <option value="Pathology">Pathology</option>
                 <option value="Surgery">Surgery</option>
-              </select>
-
-              {/* Simulation Preset Selector */}
-              <select
-                value={simLevel}
-                onChange={(e) => setSimLevel(e.target.value)}
-                className="px-2.5 py-1 rounded-lg bg-[#FFFEFC] border border-[#E8E2D5] text-[11px] text-[#4A473E] focus:outline-none focus:ring-1 focus:ring-[#C5A878] cursor-pointer"
-              >
-                <option value="">Simulation: Auto</option>
-                <option value="high">Force High Certainty (Green)</option>
-                <option value="medium">Force Ambiguity (Yellow)</option>
-                <option value="low">Force Low / Review (Red)</option>
               </select>
             </div>
 

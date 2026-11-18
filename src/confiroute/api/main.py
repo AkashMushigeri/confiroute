@@ -7,11 +7,12 @@ and frontend SPA distribution.
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 import csv
 import io
 import json
 import re
-from fastapi import FastAPI, HTTPException, status, Query
+from fastapi import FastAPI, HTTPException, status, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,6 +32,18 @@ from confiroute.db.database import (
     get_system_stats,
     get_dashboard_query_records,
     get_active_alerts,
+    authenticate_user,
+    create_user_session,
+    get_user_by_session_token,
+    revoke_user_session,
+    register_user,
+    get_review_history,
+    create_or_update_conversation,
+    get_conversations,
+    get_conversation,
+    get_conversation_messages,
+    save_conversation_message,
+    delete_conversation,
 )
 
 # Initialize database schema
@@ -230,6 +243,127 @@ class CompareRequest(BaseModel):
     provider: Optional[str] = Field(None, description="Provider override")
 
 
+# ---------------------------------------------------------------------------
+# Auth & Session Request/Response Models
+# ---------------------------------------------------------------------------
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., description="Clinician or reviewer email")
+    password: str = Field(..., min_length=4, description="Account password")
+    remember_me: bool = Field(default=True, description="Extend session duration")
+
+
+class LoginResponse(BaseModel):
+    token: str
+    user: Dict[str, Any]
+    message: str = "Authenticated successfully"
+
+
+class RegisterRequest(BaseModel):
+    email: str = Field(..., description="Clinician email")
+    password: str = Field(..., min_length=6, description="Account password")
+    name: str = Field(..., description="Full clinician name / title (e.g. Dr. Sarah Chen)")
+    role: str = Field(default="reviewer", description="User role: reviewer, admin, clinician")
+    department: str = Field(default="Clinical Review", description="Department")
+
+
+class ConversationCreateRequest(BaseModel):
+    id: Optional[str] = None
+    title: str = Field(default="Clinical Inquiry")
+    subject: str = Field(default="General Medicine")
+
+
+class ConversationMessageRequest(BaseModel):
+    id: Optional[str] = None
+    role: str = Field(..., description="'user' or 'assistant'")
+    content: str = Field(..., description="Message text content")
+    options: Optional[Dict[str, str]] = None
+    subject: Optional[str] = None
+    query_id: Optional[str] = None
+
+
+def extract_auth_user(authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
+    """Helper to extract user record from Bearer token without raising exceptions."""
+    if not authorization:
+        return None
+    token = authorization.replace("Bearer ", "").replace("bearer ", "").strip()
+    return get_user_by_session_token(token)
+
+
+def require_auth_user(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Helper enforcing valid authenticated clinician user session."""
+    user = extract_auth_user(authorization)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Please log in with valid clinical credentials.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
+# ---------------------------------------------------------------------------
+# Authentication Endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/auth/login", response_model=LoginResponse, tags=["Authentication"])
+def login(req: LoginRequest) -> LoginResponse:
+    """Authenticate clinician with email and password."""
+    user = authenticate_user(req.email, req.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password. Use demo account clinician@confiroute.ai with Clinical2026!",
+        )
+    duration = 30 if req.remember_me else 1
+    token = create_user_session(user["id"], duration_days=duration)
+    return LoginResponse(
+        token=token,
+        user=user,
+        message="Clinician session successfully established.",
+    )
+
+
+@app.get("/auth/me", tags=["Authentication"])
+def get_me(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Verify session token and retrieve current authenticated user."""
+    user = require_auth_user(authorization)
+    return {"user": user}
+
+
+@app.post("/auth/logout", tags=["Authentication"])
+def logout(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Revoke authenticated session token."""
+    if authorization:
+        token = authorization.replace("Bearer ", "").replace("bearer ", "").strip()
+        revoke_user_session(token)
+    return {"message": "Session terminated successfully."}
+
+
+@app.post("/auth/register", response_model=LoginResponse, tags=["Authentication"])
+def register(req: RegisterRequest) -> LoginResponse:
+    """Register a new verified clinical reviewer account."""
+    try:
+        user = register_user(
+            email=req.email,
+            password=req.password,
+            name=req.name,
+            role=req.role,
+            department=req.department,
+        )
+        token = create_user_session(user["id"], duration_days=7)
+        return LoginResponse(
+            token=token,
+            user=user,
+            message="Clinician account registered and authenticated.",
+        )
+    except ValueError as err:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(err),
+        )
+
+
 @app.get("/health", tags=["Health"])
 def health_check() -> Dict[str, Any]:
     """Return service health status."""
@@ -305,8 +439,28 @@ def get_review_queue(limit: int = 50) -> List[Dict[str, Any]]:
 
 
 @app.post("/review/{query_id}", response_model=ReviewResponse, tags=["Reviewer Queue"])
-def submit_review(query_id: str, review: ReviewRequest) -> ReviewResponse:
+def submit_review(
+    query_id: str,
+    review: ReviewRequest,
+    authorization: Optional[str] = Header(None),
+) -> ReviewResponse:
     """Review and resolve an escalated case (approve, edit, or reject)."""
+    reviewer_name = review.reviewer_name
+    if authorization:
+        auth_user = extract_auth_user(authorization)
+        if not auth_user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired reviewer session. Please log in again.",
+            )
+        if auth_user.get("role") not in ("reviewer", "admin", "clinician"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions. Case reviews require clinical reviewer privileges.",
+            )
+        if not reviewer_name or reviewer_name in ("reviewer1", "Dr. Sarah Chen"):
+            reviewer_name = auth_user.get("name") or reviewer_name
+
     existing = get_query_result(query_id)
     if not existing:
         raise HTTPException(
@@ -326,7 +480,7 @@ def submit_review(query_id: str, review: ReviewRequest) -> ReviewResponse:
 
     result = record_review_decision(
         query_id=query_id,
-        reviewer_name=review.reviewer_name,
+        reviewer_name=reviewer_name,
         decision=dec_norm,
         corrected_answer=review.corrected_answer,
         notes=review.notes,
@@ -346,6 +500,42 @@ def submit_review(query_id: str, review: ReviewRequest) -> ReviewResponse:
         reviewer_name=result["reviewer_name"],
         message=action_msg,
     )
+
+
+@app.get("/reviews/history", tags=["Reviewer Queue"])
+def get_review_history_endpoint(limit: int = Query(100, ge=1, le=500)) -> List[Dict[str, Any]]:
+    """Retrieve historical clinical reviewer audit records from database."""
+    records = get_review_history(limit=limit)
+    out = []
+    for r in records:
+        opts = {}
+        if r.get("options_json"):
+            try:
+                opts = json.loads(r["options_json"])
+            except Exception:
+                opts = {}
+        out.append({
+            "review_id": r.get("review_id"),
+            "query_id": r.get("query_id"),
+            "reviewer_name": r.get("reviewer_name"),
+            "decision": r.get("decision"),
+            "corrected_answer": r.get("corrected_answer"),
+            "notes": r.get("notes"),
+            "reviewed_at": r.get("reviewed_at"),
+            "question": r.get("question"),
+            "options": opts,
+            "subject": r.get("subject"),
+            "route": r.get("route"),
+            "status": r.get("status"),
+            "color": r.get("color"),
+            "score": round(float(r.get("combined") or 0.0), 2),
+            "tier1_answer": r.get("ai_draft_answer"),
+            "final_answer": r.get("final_answer"),
+            "risk_flag": bool(r.get("is_high_risk")),
+            "risk_reason": r.get("risk_reason"),
+        })
+    return out
+
 
 
 @app.get("/result/{query_id}", tags=["Routing"])
@@ -521,6 +711,92 @@ def export_csv_file(subject: Optional[str] = None):
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=confiroute_query_records.csv"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Persistent Chat Conversations Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/conversations", tags=["Conversations"])
+def list_conversations(
+    limit: int = Query(50, ge=1, le=200),
+    authorization: Optional[str] = Header(None),
+) -> List[Dict[str, Any]]:
+    """Retrieve chat conversation sessions for workspace sidebar."""
+    user = extract_auth_user(authorization)
+    user_id = user["id"] if user else None
+    return get_conversations(user_id=user_id, limit=limit)
+
+
+@app.post("/conversations", tags=["Conversations"])
+def save_conversation(
+    req: ConversationCreateRequest,
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """Create or update a conversation session."""
+    user = extract_auth_user(authorization)
+    user_id = user["id"] if user else None
+    conv_id = req.id or f"sess_{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+    return create_or_update_conversation(
+        conversation_id=conv_id,
+        title=req.title,
+        user_id=user_id,
+        subject=req.subject,
+    )
+
+
+@app.get("/conversations/{conversation_id}", tags=["Conversations"])
+def get_conversation_endpoint(conversation_id: str) -> Dict[str, Any]:
+    """Retrieve full conversation details and all associated messages."""
+    conv = get_conversation(conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail=f"Conversation '{conversation_id}' not found.")
+    messages = get_conversation_messages(conversation_id)
+    enriched_messages = []
+    for m in messages:
+        cdata = None
+        if m.get("query_id"):
+            q_row = get_query_result(m["query_id"])
+            if q_row:
+                cdata = format_case_dict(q_row)
+        enriched_messages.append({
+            "id": m["id"],
+            "role": m["role"],
+            "content": m["content"],
+            "timestamp": m["created_at"],
+            "options": m.get("options"),
+            "subject": m.get("subject"),
+            "caseData": cdata,
+        })
+    conv["messages"] = enriched_messages
+    return conv
+
+
+@app.post("/conversations/{conversation_id}/messages", tags=["Conversations"])
+def append_conversation_message(
+    conversation_id: str,
+    req: ConversationMessageRequest,
+) -> Dict[str, Any]:
+    """Append a user or assistant message to the persistent conversation."""
+    msg_id = req.id or f"msg_{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+    return save_conversation_message(
+        message_id=msg_id,
+        conversation_id=conversation_id,
+        role=req.role,
+        content=req.content,
+        options=req.options,
+        subject=req.subject,
+        query_id=req.query_id,
+    )
+
+
+@app.delete("/conversations/{conversation_id}", tags=["Conversations"])
+def remove_conversation(conversation_id: str) -> Dict[str, Any]:
+    """Delete a conversation session."""
+    deleted = delete_conversation(conversation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Conversation '{conversation_id}' not found.")
+    return {"message": "Conversation deleted successfully."}
 
 
 # Mount static assets and SPA fallback if frontend production build exists

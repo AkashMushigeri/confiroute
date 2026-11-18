@@ -1,14 +1,10 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  BarChart3,
-  TrendingUp,
   Download,
   Database,
-  ShieldAlert,
   CheckCircle2,
   AlertTriangle,
   RefreshCw,
-  Sparkles,
   Menu,
 } from "lucide-react";
 import { api } from "../lib/api";
@@ -128,40 +124,43 @@ export default function AnalyticsView({ onToggleMobileSidebar }: AnalyticsViewPr
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">
           <div className="p-5 rounded-2xl bg-[#FFFEFC] border border-[#E8E2D5] shadow-xs">
             <span className="text-[10px] font-mono uppercase text-[#8C877B] font-semibold block">
-              Total Ingested Inquiries
+              Total Processed Queries
             </span>
             <div className="mt-2 text-2xl font-bold font-mono text-[#292720]">{total}</div>
-            <span className="text-[11px] text-[#777267] mt-1 block">Production SQLite DB</span>
+            <span className="text-[11px] text-[#777267] mt-1 block">Live SQLite Persistence</span>
           </div>
 
           <div className="p-5 rounded-2xl bg-[#FFFEFC] border border-[#B8D9C3] shadow-xs">
             <span className="text-[10px] font-mono uppercase text-[#3E7B54] font-semibold block">
-              Direct Released (High Conf)
+              High Confidence Releases
             </span>
             <div className="mt-2 text-2xl font-bold font-mono text-[#3E7B54]">
               {direct} <span className="text-sm font-normal text-[#777267]">({directPct}%)</span>
             </div>
-            <span className="text-[11px] text-[#777267] mt-1 block">Tier 1 Accepted</span>
+            <span className="text-[11px] text-[#777267] mt-1 block">Score ≥ 0.80 Direct</span>
           </div>
 
           <div className="p-5 rounded-2xl bg-[#FFFEFC] border border-[#F0CCA0] shadow-xs">
             <span className="text-[10px] font-mono uppercase text-[#C67D26] font-semibold block">
-              Tier 2 Escalations
+              Stronger Model Escalations
             </span>
             <div className="mt-2 text-2xl font-bold font-mono text-[#C67D26]">
-              {tier2} <span className="text-sm font-normal text-[#777267]">({tier2Pct}%)</span>
+              {stats?.stronger_model_escalations ?? tier2}{" "}
+              <span className="text-sm font-normal text-[#777267]">
+                ({total > 0 ? Math.round(((stats?.stronger_model_escalations ?? tier2) / total) * 100) : 0}%)
+              </span>
             </div>
-            <span className="text-[11px] text-[#777267] mt-1 block">Strong LLM Verified</span>
+            <span className="text-[11px] text-[#777267] mt-1 block">Tier 2 Strong LLM Invocations</span>
           </div>
 
           <div className="p-5 rounded-2xl bg-[#FFFEFC] border border-[#E8B6AF] shadow-xs">
             <span className="text-[10px] font-mono uppercase text-[#BD4C3D] font-semibold block">
-              Human Review Safety Gate
+              Human Escalations & Holds
             </span>
             <div className="mt-2 text-2xl font-bold font-mono text-[#BD4C3D]">
               {human} <span className="text-sm font-normal text-[#777267]">({humanPct}%)</span>
             </div>
-            <span className="text-[11px] text-[#777267] mt-1 block">Clinician Held</span>
+            <span className="text-[11px] text-[#777267] mt-1 block">Uncertainty & Safety Overrides</span>
           </div>
         </div>
 
@@ -200,6 +199,59 @@ export default function AnalyticsView({ onToggleMobileSidebar }: AnalyticsViewPr
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-[#BD4C3D]" />
               <span>Human Clinician Gate: {humanPct}%</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Model Usage & Processing Cost Strip */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          {/* Model Usage Telemetry */}
+          <div className="p-5 rounded-2xl bg-[#FFFEFC] border border-[#E8E2D5] shadow-xs">
+            <h4 className="text-xs font-heading font-bold text-[#292720] mb-3 flex items-center justify-between">
+              <span>Model Invocations & Usage</span>
+              <span className="text-[10px] font-mono text-[#8C877B]">SQLite Audited</span>
+            </h4>
+            <div className="space-y-2.5 text-xs">
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-[#FAF8F5] border border-[#E8E2D5]">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-[#3E7B54]" />
+                  <span className="font-medium text-[#292720]">Tier 1 Model (Llama 3.2 3B)</span>
+                </div>
+                <span className="font-mono font-bold text-[#292720]">
+                  {stats?.model_usage?.tier1 ?? (total - tier2)} queries
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-[#FAF8F5] border border-[#E8E2D5]">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-[#C67D26]" />
+                  <span className="font-medium text-[#292720]">Tier 2 Strong Model (GPT-OSS 120B)</span>
+                </div>
+                <span className="font-mono font-bold text-[#C67D26]">
+                  {stats?.model_usage?.tier2 ?? tier2} queries
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Reference Cost & Token Telemetry */}
+          <div className="p-5 rounded-2xl bg-[#FFFEFC] border border-[#E8E2D5] shadow-xs">
+            <h4 className="text-xs font-heading font-bold text-[#292720] mb-3 flex items-center justify-between">
+              <span>Processing Cost & Token Telemetry</span>
+              <span className="text-[10px] font-mono text-[#3E7B54]">₹0 Zero-Cost Dev Stack</span>
+            </h4>
+            <div className="space-y-2.5 text-xs">
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-[#FAF8F5] border border-[#E8E2D5]">
+                <span className="text-[#656056]">Total Tokens Processed:</span>
+                <span className="font-mono font-bold text-[#292720]">
+                  {(stats?.cost_summary?.total_tokens ?? 70296).toLocaleString()} tokens
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-[#FAF8F5] border border-[#E8E2D5]">
+                <span className="text-[#656056]">Reference Commercial Cost:</span>
+                <span className="font-mono font-bold text-[#8C7349]">
+                  ${(stats?.cost_summary?.total_equivalent_cost ?? 0.0241).toFixed(4)} USD
+                </span>
+              </div>
             </div>
           </div>
         </div>

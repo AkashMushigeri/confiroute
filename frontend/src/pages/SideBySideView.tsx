@@ -1,14 +1,9 @@
-import React, { useState } from "react";
+import { useState, useEffect } from "react";
 import {
-  GitCompare,
   AlertTriangle,
   ShieldCheck,
   ShieldAlert,
-  ArrowRight,
   Loader2,
-  Sparkles,
-  CheckCircle2,
-  XCircle,
   Menu,
 } from "lucide-react";
 import { api, PRESETS, type Preset } from "../lib/api";
@@ -49,7 +44,7 @@ export default function SideBySideView({ onToggleMobileSidebar }: SideBySideView
   };
 
   // Run initial comparison on mount
-  React.useEffect(() => {
+  useEffect(() => {
     runComparison(selectedPreset.question, selectedPreset.options, selectedPreset.subject, selectedPreset.sim_level);
   }, []);
 

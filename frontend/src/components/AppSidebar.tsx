@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import {
   ShieldCheck,
   Plus,
@@ -13,8 +13,6 @@ import {
   Trash2,
   Sparkles,
   X,
-  Radio,
-  Stethoscope,
 } from "lucide-react";
 import type { ChatSession, ViewMode } from "../types";
 import { PRESETS, type Preset } from "../lib/api";
