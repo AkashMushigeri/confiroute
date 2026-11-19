@@ -406,6 +406,51 @@ def record_review_decision(
 
 def get_pending_reviews(limit: int = 50, custom_path: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Retrieve cases awaiting human clinician review."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import Query, Route, Signal
+        with get_db_context() as db:
+            routes = (
+                db.query(Route)
+                .join(Query, Route.query_id == Query.id)
+                .filter(Route.status.in_(["pending_human", "pending_tier2"]))
+                .order_by(Query.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            rows = []
+            for r in routes:
+                q = r.query
+                s = q.signals if q else None
+                opts = {}
+                if q and q.options_json:
+                    try:
+                        opts = json.loads(q.options_json)
+                    except Exception:
+                        opts = {}
+                rows.append({
+                    "id": q.id if q else r.query_id,
+                    "question": q.question if q else "",
+                    "options": opts,
+                    "options_json": q.options_json if q else "{}",
+                    "subject": q.subject if q else "General Medicine",
+                    "topic": q.topic if q else "General",
+                    "created_at": q.created_at.isoformat() if q and q.created_at else "",
+                    "s1": s.s1 if s else None,
+                    "s2": s.s2 if s else None,
+                    "s3": s.s3 if s else None,
+                    "combined": s.combined if s else None,
+                    "route": r.route,
+                    "status": r.status,
+                    "color": r.color,
+                    "ai_draft_answer": r.ai_draft_answer,
+                    "tier_used": r.tier_used,
+                    "is_high_risk": r.is_high_risk,
+                    "risk_reason": r.risk_reason,
+                    "reason": r.reason,
+                })
+            return rows
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
