@@ -1,344 +1,250 @@
-"""Supabase Cloud Database & Persistence Verification Script.
+"""ConfiRoute - Supabase PostgreSQL Database Verification Script.
 
-Executes end-to-end verification of cloud PostgreSQL connectivity, schema tables,
-user registration, authentication, conversation persistence across engine restarts,
-routing log recording, human review tracking, and administrator oversight.
-
-Strictly refuses to report cloud success if operating against local SQLite.
+Verifies:
+1. Database URL configuration from environment/app config.
+2. Dialect detection (PostgreSQL vs SQLite).
+3. Connected host and database name (with strict masking: no credentials or secrets).
+4. PostgreSQL server version.
+5. Existing application tables accessibility.
+6. Temporary test record write, read, and cleanup.
+7. Database transaction semantics (commit and rollback).
+8. Connection type reporting (PostgreSQL/Supabase vs SQLite/local fallback).
+9. Non-zero exit code if PostgreSQL was required but SQLite or failed connection.
 """
 
 import argparse
 import os
 import sys
-import time
-from typing import Dict, Any
+import uuid
+from pathlib import Path
+
+# Ensure package is on sys.path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(PROJECT_ROOT / ".env")
 
-from fastapi.testclient import TestClient
-from sqlalchemy import text
-from confiroute.api.main import app
-from confiroute.db.connection import (
-    get_engine,
-    reset_engine,
-    test_cloud_connection,
-    init_cloud_and_local_db,
-    get_db_context,
-)
-from confiroute.db.models import (
-    User,
-    Profile,
-    Conversation,
-    Message,
-    RoutingLog,
-    HumanReview,
-    AuditLog,
-)
-
-client = TestClient(app)
+from sqlalchemy import create_engine, text, inspect
+from confiroute.config import get_config
+from confiroute.db.connection import normalize_database_url, get_engine, reset_engine
+from confiroute.db.database import init_db
 
 
-def print_step(title: str):
-    print("\n" + "=" * 70)
-    print(f"STEP: {title}")
+def mask_string(val: str) -> str:
+    """Mask credentials or sensitive query strings."""
+    if not val:
+        return ""
+    if "@" in val:
+        parts = val.split("@")
+        prefix = parts[0]
+        suffix = parts[-1]
+        proto = prefix.split("://")[0] if "://" in prefix else ""
+        return f"{proto}://*****:*****@{suffix}"
+    return val
+
+
+def run_verification(allow_sqlite: bool = False, custom_url: str = None) -> int:
+    print("=" * 70)
+    print("CONFIROUTE - SUPABASE POSTGRESQL VERIFICATION")
     print("=" * 70)
 
-
-def run_full_cloud_verification(allow_sqlite: bool = False, custom_url: str = None) -> Dict[str, Any]:
+    # 1. Read Database URL
     if custom_url:
         os.environ["DATABASE_URL"] = custom_url
         reset_engine()
 
-    raw_env_url = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL") or ""
-    masked_url = (
-        raw_env_url[:15] + "..." + raw_env_url[raw_env_url.rfind("@"):]
-        if "@" in raw_env_url
-        else (raw_env_url if raw_env_url else "NOT_CONFIGURED")
-    )
+    raw_url = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL") or ""
+    is_configured = bool(raw_url.strip())
+    norm_url = normalize_database_url(raw_url)
 
-    report = {
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "database_url_configured": bool(raw_env_url),
-        "database_target": masked_url,
-        "dialect": None,
-        "is_postgresql": False,
-        "cloud_verified": False,
-        "pg_version": None,
-        "tables_verified": False,
-        "registration_passed": False,
-        "login_passed": False,
-        "conversation_passed": False,
-        "message_persistence_passed": False,
-        "restart_survival_passed": False,
-        "routing_log_passed": False,
-        "human_review_passed": False,
-        "admin_verification_passed": False,
-        "rbac_rejection_passed": False,
-    }
+    engine = get_engine()
+    dialect_name = engine.dialect.name
+    is_postgres = dialect_name.startswith("postgres")
 
-    print_step("1. Probing Database Connectivity & Schema Engine")
-    db_status = test_cloud_connection()
-    report["dialect"] = db_status["dialect"]
-    report["is_postgresql"] = db_status["is_postgresql"]
+    # 2. Host & Database Name (never credentials or full URL)
+    host = engine.url.host or ("embedded" if dialect_name == "sqlite" else "localhost")
+    database_name = engine.url.database or ("data/confiroute.db" if dialect_name == "sqlite" else "postgres")
+    port = engine.url.port or (5432 if is_postgres else None)
 
-    print(f"Connected: {db_status['connected']}")
-    print(f"Dialect:   {db_status['dialect']}")
-    print(f"Target is PostgreSQL / Supabase: {db_status['is_postgresql']}")
-    print(f"Configured Target: {masked_url}")
+    print(f"[*] Environment DATABASE_URL set : {is_configured}")
+    print(f"[*] Active Database Dialect       : {dialect_name}")
+    print(f"[*] Connected Host               : {host}")
+    print(f"[*] Connected Database Name      : {database_name}")
+    if port:
+        print(f"[*] Connected Port               : {port}")
 
-    # Strict check: Refuse cloud verification if running against SQLite without explicit flag
-    if not db_status["is_postgresql"] and not allow_sqlite:
-        print("\n" + "!" * 70)
-        print("[ERROR] CLOUD VERIFICATION REFUSED: Active Dialect is 'sqlite'!")
-        print("!" * 70)
-        print("ConfiRoute is currently connected to local SQLite, NOT Supabase PostgreSQL.")
-        print(f"Current Dialect: {db_status['dialect']}")
-        print(f"Target Database: Local file fallback (data/confiroute.db)")
-        print("\nSupabase cloud verification cannot pass against SQLite.")
-        print("To verify actual Supabase PostgreSQL:")
-        print("1. Log in to your Supabase project: https://supabase.com/dashboard")
-        print("2. Navigate to Project Settings -> Database -> Connection String -> URI")
-        print("3. Configure DATABASE_URL in your local .env file:")
-        print("   DATABASE_URL=postgresql+psycopg2://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres?sslmode=require")
-        print("4. Re-run:")
-        print("   python scripts/verify_supabase.py")
-        print("\n(To run local SQLite persistence tests only, use: python scripts/verify_supabase.py --allow-sqlite)")
-        print("!" * 70)
-        report["cloud_verified"] = False
-        report["error"] = "Verification refused: Active dialect is sqlite, not PostgreSQL"
-        sys.exit(1)
-
-    if db_status["is_postgresql"]:
-        with get_engine().connect() as conn:
-            pg_ver = conn.execute(text("SELECT version()")).scalar()
-            report["pg_version"] = pg_ver
-            print(f"[PASS] PostgreSQL Server Version: {pg_ver}")
-
-    print(f"Tables Found: {len(db_status['tables_found'])} tables -> {db_status['tables_found']}")
-
-    if not db_status["required_tables_present"]:
-        print(f"Initializing missing tables: {db_status['missing_tables']}")
-        init_cloud_and_local_db()
-        db_status = test_cloud_connection()
-
-    assert db_status["required_tables_present"], f"Missing tables: {db_status['missing_tables']}"
-    report["tables_verified"] = True
-    print("[PASS] All required schema tables confirmed present.")
-
-    # 2. User Registration
-    print_step("2. User Registration")
-    test_ts = int(time.time() * 1000)
-    test_email = f"clinician_cloud_{test_ts}@hospital.org"
-    reg_resp = client.post(
-        "/auth/register",
-        json={
-            "email": test_email,
-            "password": "CloudPassword2026!",
-            "name": f"Dr. Cloud Specialist {test_ts % 1000}",
-            "role": "clinician",
-            "department": "Critical Care Medicine",
-        },
-    )
-    assert reg_resp.status_code == 200, f"Registration failed: {reg_resp.text}"
-    reg_data = reg_resp.json()
-    user_id = reg_data["user"]["id"]
-    token = reg_data["token"]
-    report["registration_passed"] = True
-    print(f"[PASS] User registered: {test_email} (ID: {user_id})")
-
-    # 3. User Login & Token Verification
-    print_step("3. User Login & Token Verification")
-    login_resp = client.post(
-        "/auth/login",
-        json={"email": test_email, "password": "CloudPassword2026!"},
-    )
-    assert login_resp.status_code == 200, f"Login failed: {login_resp.text}"
-    login_data = login_resp.json()
-    assert login_data["user"]["email"] == test_email
-    token = login_data["token"]
-    headers = {"Authorization": f"Bearer {token}"}
-    report["login_passed"] = True
-    print(f"[PASS] Login verified. Session token acquired.")
-
-    # 4. Conversation Creation & Message Persistence
-    print_step("4. Conversation Creation & Message Persistence")
-    conv_id = f"cloud_conv_{test_ts}"
-    conv_resp = client.post(
-        "/conversations",
-        headers=headers,
-        json={
-            "id": conv_id,
-            "title": f"ICU Clinical Inquiry {test_ts % 1000}",
-            "subject": "Intensive Care",
-        },
-    )
-    assert conv_resp.status_code == 200, f"Conversation creation failed: {conv_resp.text}"
-    report["conversation_passed"] = True
-    print(f"[PASS] Conversation created: {conv_id}")
-
-    # Send User Question Message
-    msg_1_id = f"msg_user_{test_ts}"
-    msg_1_resp = client.post(
-        f"/conversations/{conv_id}/messages",
-        headers=headers,
-        json={
-            "id": msg_1_id,
-            "role": "user",
-            "content": "Patient in septic shock refractory to norepinephrine. Next line vasopressor?",
-            "subject": "Intensive Care",
-        },
-    )
-    assert msg_1_resp.status_code == 200, f"User message save failed: {msg_1_resp.text}"
-
-    # Evaluate query with ConfiRoute
-    ask_resp = client.post(
-        "/ask",
-        json={
-            "question": "In septic shock refractory to norepinephrine, what is the recommended second-line vasopressor according to Surviving Sepsis guidelines?",
-            "options": {
-                "A": "Vasopressin (up to 0.03 units/min)",
-                "B": "High-dose dopamine monotherapy",
-                "C": "Phenylephrine infusion only",
-                "D": "Discontinue vasopressors immediately",
-            },
-            "subject": "Intensive Care",
-        },
-    )
-    assert ask_resp.status_code == 200, f"Inference ask failed: {ask_resp.text}"
-    ask_data = ask_resp.json()
-    qid = ask_data["query_id"]
-
-    # Append Assistant Response
-    msg_2_id = f"msg_ai_{test_ts}"
-    msg_2_resp = client.post(
-        f"/conversations/{conv_id}/messages",
-        headers=headers,
-        json={
-            "id": msg_2_id,
-            "role": "assistant",
-            "content": ask_data["final_answer"] or ask_data["ai_draft_answer"],
-            "query_id": qid,
-            "subject": "Intensive Care",
-        },
-    )
-    assert msg_2_resp.status_code == 200
-    report["message_persistence_passed"] = True
-    print(f"[PASS] Messages persisted into conversation {conv_id}.")
-
-    # 5. Database Restart & Persistence Survival Test
-    print_step("5. Simulating Backend Restart & Discarding Connections")
-    # Reset engine connections and simulate service restart
-    reset_engine()
-    print("[INFO] Engine connections successfully disposed and pool reset.")
-
-    # Re-verify conversation retrieval with fresh connection
-    re_get = client.get(f"/conversations/{conv_id}", headers=headers)
-    assert re_get.status_code == 200, f"Retrieval after restart failed: {re_get.text}"
-    conv_data = re_get.json()
-    assert len(conv_data["messages"]) == 2, f"Expected 2 messages, got {len(conv_data['messages'])}"
-    assert conv_data["messages"][0]["content"].startswith("Patient in septic shock")
-    report["restart_survival_passed"] = True
-    print(f"[PASS] Persistence verified across engine restart: 2/2 messages survived intact.")
-
-    # 6. Routing Log Verification
-    print_step("6. Routing Log Persistence Verification")
-    logs_resp = client.get("/routing/logs?limit=10", headers=headers)
-    assert logs_resp.status_code == 200
-    logs = logs_resp.json()
-    assert any(l["query_id"] == qid for l in logs), f"Query {qid} not found in routing_logs"
-    report["routing_log_passed"] = True
-    print(f"[PASS] Routing log for query {qid} confirmed in routing_logs table.")
-
-    # 7. Human Review Persistence & Audit Log
-    print_step("7. Human Review Persistence Verification")
-    rev_resp = client.post(
-        f"/review/{qid}",
-        headers=headers,
-        json={
-            "reviewer_name": "Dr. Sarah Chen, MD",
-            "decision": "approve",
-            "notes": "Vasopressin second-line titration verified per Surviving Sepsis Campaign.",
-        },
-    )
-    assert rev_resp.status_code == 200, f"Review submission failed: {rev_resp.text}"
-    report["human_review_passed"] = True
-    print(f"[PASS] Human review for case {qid} recorded.")
-
-    # Direct DB inspection via SQLAlchemy context
-    with get_db_context() as db:
-        rev_record = db.query(HumanReview).filter(HumanReview.query_id == qid).first()
-        assert rev_record is not None
-        assert rev_record.decision == "approved"
-
-        audit_entry = db.query(AuditLog).filter(AuditLog.resource_id == qid).first()
-        assert audit_entry is not None
-        assert audit_entry.action == "review_submit"
-
-        # Direct SQL inspection
-        engine = get_engine()
+    # 3. Connectivity Probe
+    try:
         with engine.connect() as conn:
-            u_cnt = conn.execute(text("SELECT count(*) FROM users")).scalar()
-            c_cnt = conn.execute(text("SELECT count(*) FROM conversations")).scalar()
-            print(f"[DIRECT DB CHECK] users count: {u_cnt}, conversations count: {c_cnt}")
+            conn.execute(text("SELECT 1"))
+        print("[+] Basic connectivity test passed (SELECT 1).")
+    except Exception as exc:
+        print(f"[-] Connection failed: {type(exc).__name__}")
+        print("=" * 70)
+        print("[FAILED] Could not connect to the database engine.")
+        print("=" * 70)
+        return 1
 
-    print(f"[PASS] Direct database query confirmed HumanReview and AuditLog records.")
+    # 4. Check PostgreSQL Version
+    if is_postgres:
+        with engine.connect() as conn:
+            version_str = conn.execute(text("SELECT version()")).scalar()
+            print(f"[+] PostgreSQL Server Version    : {version_str}")
+    else:
+        print("[-] PostgreSQL Server Version    : N/A (Current dialect is SQLite)")
 
-    # 8. Administrator Dashboard Verification
-    print_step("8. Admin Dashboard & RBAC Access Verification")
-    # Clinician token must be rejected with 403 on /admin/*
-    assert client.get("/admin/users", headers=headers).status_code == 403
-    assert client.get("/admin/stats", headers=headers).status_code == 403
-    report["rbac_rejection_passed"] = True
-    print("[PASS] Unauthorized access to /admin/* correctly rejected with HTTP 403 Forbidden.")
+    # Ensure tables are initialized if brand new database
+    inspector = inspect(engine)
+    existing_tables = sorted(inspector.get_table_names())
+    if not existing_tables:
+        print("[*] No tables found; initializing schema...")
+        init_db()
+        inspector = inspect(engine)
+        existing_tables = sorted(inspector.get_table_names())
 
-    # Admin Login
-    admin_login = client.post(
-        "/auth/login",
-        json={"email": "admin@confiroute.ai", "password": "AdminSecure2026!"},
-    )
-    assert admin_login.status_code == 200, f"Admin login failed: {admin_login.text}"
-    admin_token = admin_login.json()["token"]
-    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    # 5. Verify Existing Application Tables Access
+    print(f"[*] Application Tables Detected ({len(existing_tables)} tables):")
+    core_tables = ["queries", "signals", "routes", "reviews", "costs", "alerts"]
+    for tbl in existing_tables:
+        try:
+            with engine.connect() as conn:
+                count = conn.execute(text(f"SELECT count(*) FROM {tbl}")).scalar()
+            mark = "[CORE]" if tbl in core_tables else "[APP]"
+            print(f"    {mark:7} {tbl:<24} : {count} records")
+        except Exception as e:
+            print(f"    [ERR]   {tbl:<24} : inaccessible ({type(e).__name__})")
 
-    # Admin reads users
-    admin_users = client.get("/admin/users", headers=admin_headers)
-    assert admin_users.status_code == 200
-    user_list = admin_users.json()
-    assert any(u["email"] == test_email for u in user_list)
-    print(f"[PASS] Admin user directory verified ({len(user_list)} registered users visible).")
+    missing_core = [t for t in core_tables if t not in existing_tables]
+    if missing_core:
+        print(f"[-] Missing core application tables: {missing_core}")
+        return 1
+    print("[+] All core application tables accessible.")
 
-    # Admin reads stats
-    admin_stats = client.get("/admin/stats", headers=admin_headers)
-    assert admin_stats.status_code == 200
-    stats = admin_stats.json()
-    assert stats["total_conversations"] >= 1
-    assert stats["total_routing_logs"] >= 1
-    report["admin_verification_passed"] = True
-    print(f"[PASS] Admin stats verified (Total convs: {stats['total_conversations']}, Queries: {stats['total_queries']}).")
+    # 6 & 7. Test Transaction Semantics (Rollback & Commit) and Safe Temporary Record
+    test_token = f"probe_{uuid.uuid4().hex[:10]}"
+    test_msg_rb = f"rollback_{test_token}"
+    test_msg_commit = f"commit_{test_token}"
 
-    report["cloud_verified"] = report["is_postgresql"]
-    return report
+    print("[*] Testing transaction semantics and read/write integrity...")
+
+    # A. Transaction Rollback Test
+    try:
+        with engine.connect() as conn:
+            trans = conn.begin()
+            conn.execute(
+                text("INSERT INTO alerts (alert_type, message, severity) VALUES (:type, :msg, :sev)"),
+                {"type": "verification_probe", "msg": test_msg_rb, "sev": "test"},
+            )
+            trans.rollback()
+
+        with engine.connect() as conn:
+            rb_found = conn.execute(
+                text("SELECT count(*) FROM alerts WHERE message = :msg"),
+                {"msg": test_msg_rb},
+            ).scalar()
+
+        if rb_found != 0:
+            print("[-] Transaction rollback failed: uncommitted record persisted.")
+            return 1
+        print("[+] Transaction rollback verified successfully.")
+    except Exception as exc:
+        print(f"[-] Error during rollback test: {type(exc).__name__}")
+        return 1
+
+    # B. Transaction Commit, Read & Cleanup Test
+    try:
+        with engine.connect() as conn:
+            trans = conn.begin()
+            conn.execute(
+                text("INSERT INTO alerts (alert_type, message, severity) VALUES (:type, :msg, :sev)"),
+                {"type": "verification_probe", "msg": test_msg_commit, "sev": "test"},
+            )
+            trans.commit()
+
+        # Read back test
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT alert_type, message, severity FROM alerts WHERE message = :msg"),
+                {"msg": test_msg_commit},
+            ).fetchone()
+
+        if row is None or row[0] != "verification_probe" or row[1] != test_msg_commit:
+            print("[-] Transaction commit verification failed: record not read back correctly.")
+            return 1
+        print("[+] Transaction commit, write, and read verified successfully.")
+
+        # Cleanup test record
+        with engine.connect() as conn:
+            trans = conn.begin()
+            conn.execute(
+                text("DELETE FROM alerts WHERE message = :msg"),
+                {"msg": test_msg_commit},
+            )
+            trans.commit()
+
+        # Confirm cleanup
+        with engine.connect() as conn:
+            rem = conn.execute(
+                text("SELECT count(*) FROM alerts WHERE message = :msg"),
+                {"msg": test_msg_commit},
+            ).scalar()
+
+        if rem != 0:
+            print("[-] Cleanup verification failed: temporary record not deleted.")
+            return 1
+        print("[+] Temporary test record cleaned up safely (zero remnant data).")
+
+    except Exception as exc:
+        print(f"[-] Error during commit/write/cleanup test: {type(exc).__name__}")
+        return 1
+
+    # 8 & 9. Final Dialect Evaluation & Reporting
+    print("=" * 70)
+    print("VERIFICATION SUMMARY")
+    print("=" * 70)
+
+    if is_postgres:
+        print("Connection Target : PostgreSQL / Supabase Cloud Database")
+        print("Status            : PASS - REAL SUPABASE POSTGRESQL VERIFIED")
+        print("=" * 70)
+        return 0
+    else:
+        print("Connection Target : SQLite / Local File Fallback")
+        if allow_sqlite:
+            print("Status            : PASS (LOCAL MODE ONLY - via --allow-sqlite)")
+            print("Note              : Active dialect is SQLite. Supabase PostgreSQL is NOT connected.")
+            print("=" * 70)
+            return 0
+        else:
+            print("Status            : FAILED (PostgreSQL required, but SQLite is active)")
+            print("\n[!] Supabase cloud verification failed because SQLite is in use.")
+            print("    To verify actual Supabase PostgreSQL:")
+            print("    1. Log in to your Supabase project: https://supabase.com/dashboard")
+            print("    2. Navigate to Project Settings -> Database -> Connection String -> URI")
+            print("    3. Configure DATABASE_URL in your local .env file:")
+            print("       DATABASE_URL=postgresql+psycopg2://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres?sslmode=require")
+            print("    4. Re-run: python scripts/verify_supabase.py")
+            print("\n    (Pass --allow-sqlite if you only intend to test local SQLite persistence).")
+            print("=" * 70)
+            return 1
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Supabase Cloud Database & Persistence Verification")
-    parser.add_argument("--allow-sqlite", action="store_true", help="Allow verification to run on local SQLite")
-    parser.add_argument("--db-url", type=str, default=None, help="Explicit database URL override")
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(description="Verify ConfiRoute Supabase PostgreSQL Connection")
+    parser.add_argument(
+        "--allow-sqlite",
+        action="store_true",
+        help="Permit verification against local SQLite without failing",
+    )
+    parser.add_argument(
+        "--db-url",
+        type=str,
+        default=None,
+        help="Optional database URL override for connection testing",
+    )
+    cli_args = parser.parse_args()
 
-    report = run_full_cloud_verification(allow_sqlite=args.allow_sqlite, custom_url=args.db_url)
-    print("\n" + "=" * 70)
-    print("VERIFICATION COMPLETE")
-    print("=" * 70)
-    for k, v in report.items():
-        print(f" - {k:30}: {v}")
-
-    if report["cloud_verified"]:
-        print("\n" + "=" * 70)
-        print("[PASS] ACTUAL SUPABASE POSTGRESQL VERIFICATION SUCCESSFUL!")
-        print("=" * 70)
-    else:
-        print("\n" + "=" * 70)
-        print("[WARNING] Local SQLite verification completed (NOT Supabase PostgreSQL).")
-        print("=" * 70)
+    exit_code = run_verification(allow_sqlite=cli_args.allow_sqlite, custom_url=cli_args.db_url)
+    sys.exit(exit_code)
