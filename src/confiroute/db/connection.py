@@ -22,6 +22,27 @@ _engine: Optional[Engine] = None
 _SessionFactory: Optional[sessionmaker] = None
 
 
+def reset_engine() -> None:
+    """Dispose and reset cached engine and session factory."""
+    global _engine, _SessionFactory
+    if _engine is not None:
+        try:
+            _engine.dispose()
+        except Exception:
+            pass
+    _engine = None
+    _SessionFactory = None
+
+
+def is_postgres() -> bool:
+    """Return True if active database engine dialect is PostgreSQL."""
+    try:
+        engine = get_engine()
+        return engine.dialect.name.startswith("postgres")
+    except Exception:
+        return False
+
+
 def normalize_database_url(url: Optional[str]) -> str:
     """Normalize and format database connection URL for SQLAlchemy with automatic SSL handling."""
     if not url or not url.strip():

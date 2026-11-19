@@ -3,8 +3,11 @@
 Executes end-to-end verification of cloud PostgreSQL connectivity, schema tables,
 user registration, authentication, conversation persistence across engine restarts,
 routing log recording, human review tracking, and administrator oversight.
+
+Strictly refuses to report cloud success if operating against local SQLite.
 """
 
+import argparse
 import os
 import sys
 import time
@@ -14,9 +17,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 from confiroute.api.main import app
 from confiroute.db.connection import (
     get_engine,
+    reset_engine,
     test_cloud_connection,
     init_cloud_and_local_db,
     get_db_context,
@@ -40,12 +45,26 @@ def print_step(title: str):
     print("=" * 70)
 
 
-def run_full_cloud_verification() -> Dict[str, Any]:
+def run_full_cloud_verification(allow_sqlite: bool = False, custom_url: str = None) -> Dict[str, Any]:
+    if custom_url:
+        os.environ["DATABASE_URL"] = custom_url
+        reset_engine()
+
+    raw_env_url = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL") or ""
+    masked_url = (
+        raw_env_url[:15] + "..." + raw_env_url[raw_env_url.rfind("@"):]
+        if "@" in raw_env_url
+        else (raw_env_url if raw_env_url else "NOT_CONFIGURED")
+    )
+
     report = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "database_url_configured": bool(os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")),
+        "database_url_configured": bool(raw_env_url),
+        "database_target": masked_url,
         "dialect": None,
         "is_postgresql": False,
+        "cloud_verified": False,
+        "pg_version": None,
         "tables_verified": False,
         "registration_passed": False,
         "login_passed": False,
@@ -62,9 +81,40 @@ def run_full_cloud_verification() -> Dict[str, Any]:
     db_status = test_cloud_connection()
     report["dialect"] = db_status["dialect"]
     report["is_postgresql"] = db_status["is_postgresql"]
+
     print(f"Connected: {db_status['connected']}")
     print(f"Dialect:   {db_status['dialect']}")
     print(f"Target is PostgreSQL / Supabase: {db_status['is_postgresql']}")
+    print(f"Configured Target: {masked_url}")
+
+    # Strict check: Refuse cloud verification if running against SQLite without explicit flag
+    if not db_status["is_postgresql"] and not allow_sqlite:
+        print("\n" + "!" * 70)
+        print("[ERROR] CLOUD VERIFICATION REFUSED: Active Dialect is 'sqlite'!")
+        print("!" * 70)
+        print("ConfiRoute is currently connected to local SQLite, NOT Supabase PostgreSQL.")
+        print(f"Current Dialect: {db_status['dialect']}")
+        print(f"Target Database: Local file fallback (data/confiroute.db)")
+        print("\nSupabase cloud verification cannot pass against SQLite.")
+        print("To verify actual Supabase PostgreSQL:")
+        print("1. Log in to your Supabase project: https://supabase.com/dashboard")
+        print("2. Navigate to Project Settings -> Database -> Connection String -> URI")
+        print("3. Configure DATABASE_URL in your local .env file:")
+        print("   DATABASE_URL=postgresql+psycopg2://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres?sslmode=require")
+        print("4. Re-run:")
+        print("   python scripts/verify_supabase.py")
+        print("\n(To run local SQLite persistence tests only, use: python scripts/verify_supabase.py --allow-sqlite)")
+        print("!" * 70)
+        report["cloud_verified"] = False
+        report["error"] = "Verification refused: Active dialect is sqlite, not PostgreSQL"
+        sys.exit(1)
+
+    if db_status["is_postgresql"]:
+        with get_engine().connect() as conn:
+            pg_ver = conn.execute(text("SELECT version()")).scalar()
+            report["pg_version"] = pg_ver
+            print(f"[PASS] PostgreSQL Server Version: {pg_ver}")
+
     print(f"Tables Found: {len(db_status['tables_found'])} tables -> {db_status['tables_found']}")
 
     if not db_status["required_tables_present"]:
@@ -178,10 +228,9 @@ def run_full_cloud_verification() -> Dict[str, Any]:
 
     # 5. Database Restart & Persistence Survival Test
     print_step("5. Simulating Backend Restart & Discarding Connections")
-    # Dispose active SQLAlchemy engine and recreate fresh pool
-    engine = get_engine()
-    engine.dispose()
-    print("[INFO] Engine connections successfully disposed.")
+    # Reset engine connections and simulate service restart
+    reset_engine()
+    print("[INFO] Engine connections successfully disposed and pool reset.")
 
     # Re-verify conversation retrieval with fresh connection
     re_get = client.get(f"/conversations/{conv_id}", headers=headers)
@@ -225,6 +274,14 @@ def run_full_cloud_verification() -> Dict[str, Any]:
         audit_entry = db.query(AuditLog).filter(AuditLog.resource_id == qid).first()
         assert audit_entry is not None
         assert audit_entry.action == "review_submit"
+
+        # Direct SQL inspection
+        engine = get_engine()
+        with engine.connect() as conn:
+            u_cnt = conn.execute(text("SELECT count(*) FROM users")).scalar()
+            c_cnt = conn.execute(text("SELECT count(*) FROM conversations")).scalar()
+            print(f"[DIRECT DB CHECK] users count: {u_cnt}, conversations count: {c_cnt}")
+
     print(f"[PASS] Direct database query confirmed HumanReview and AuditLog records.")
 
     # 8. Administrator Dashboard Verification
@@ -260,13 +317,28 @@ def run_full_cloud_verification() -> Dict[str, Any]:
     report["admin_verification_passed"] = True
     print(f"[PASS] Admin stats verified (Total convs: {stats['total_conversations']}, Queries: {stats['total_queries']}).")
 
+    report["cloud_verified"] = report["is_postgresql"]
     return report
 
 
 if __name__ == "__main__":
-    report = run_full_cloud_verification()
+    parser = argparse.ArgumentParser(description="Supabase Cloud Database & Persistence Verification")
+    parser.add_argument("--allow-sqlite", action="store_true", help="Allow verification to run on local SQLite")
+    parser.add_argument("--db-url", type=str, default=None, help="Explicit database URL override")
+    args = parser.parse_args()
+
+    report = run_full_cloud_verification(allow_sqlite=args.allow_sqlite, custom_url=args.db_url)
     print("\n" + "=" * 70)
     print("VERIFICATION COMPLETE")
     print("=" * 70)
     for k, v in report.items():
         print(f" - {k:30}: {v}")
+
+    if report["cloud_verified"]:
+        print("\n" + "=" * 70)
+        print("[PASS] ACTUAL SUPABASE POSTGRESQL VERIFICATION SUCCESSFUL!")
+        print("=" * 70)
+    else:
+        print("\n" + "=" * 70)
+        print("[WARNING] Local SQLite verification completed (NOT Supabase PostgreSQL).")
+        print("=" * 70)

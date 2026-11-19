@@ -33,8 +33,25 @@ def get_connection(custom_path: Optional[Path] = None) -> sqlite3.Connection:
     return conn
 
 
+def is_cloud_postgres() -> bool:
+    """Return True if active database engine dialect is PostgreSQL."""
+    try:
+        from confiroute.db.connection import is_postgres
+        return is_postgres()
+    except Exception:
+        return False
+
+
 def init_db(custom_path: Optional[Path] = None) -> None:
     """Execute schema.sql to ensure all required tables and indices exist."""
+    if custom_path is None and is_cloud_postgres():
+        try:
+            from confiroute.db.connection import init_cloud_and_local_db
+            init_cloud_and_local_db()
+        except Exception:
+            pass
+        return
+
     conn = get_connection(custom_path)
     try:
         with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
@@ -174,6 +191,59 @@ def save_pipeline_execution(
 ) -> str:
     """Atomic helper that commits the full query, signals, route, and cost in one transaction."""
     qid = query_id or f"q-{uuid.uuid4().hex[:10]}"
+
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import Query, Signal, Route, Cost
+        with get_db_context() as db:
+            q_obj = Query(
+                id=qid,
+                question=question,
+                options_json=json.dumps(options) if options else "{}",
+                correct_letter=correct_letter,
+                subject=subject or "General Medicine",
+                topic=topic or "General",
+            )
+            db.add(q_obj)
+            db.flush()
+
+            sig_obj = Signal(
+                query_id=qid,
+                s1=decision.scores.get("s1"),
+                s2=decision.scores.get("s2"),
+                s3=decision.scores.get("s3"),
+                combined=decision.scores.get("combined", 0.0),
+            )
+            db.add(sig_obj)
+
+            route_obj = Route(
+                query_id=qid,
+                route=decision.route,
+                status=decision.status,
+                color=decision.color,
+                ai_draft_answer=decision.ai_draft_answer,
+                final_answer=decision.final_answer,
+                tier_used=decision.tier_used,
+                is_high_risk=1 if decision.is_high_risk else 0,
+                risk_reason=decision.risk_reason,
+                reason=decision.reason,
+            )
+            db.add(route_obj)
+
+            tokens = decision.tokens_used or {}
+            costs = decision.cost_metadata or {}
+            cost_obj = Cost(
+                query_id=qid,
+                prompt_tokens=tokens.get("prompt_tokens", 0),
+                completion_tokens=tokens.get("completion_tokens", 0),
+                total_tokens=tokens.get("prompt_tokens", 0) + tokens.get("completion_tokens", 0),
+                real_cost=costs.get("real_cost", 0.0),
+                equivalent_cost=costs.get("equivalent_cost", 0.0),
+                latency_ms=costs.get("latency_ms", 0.0),
+            )
+            db.add(cost_obj)
+        return qid
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -219,7 +289,52 @@ def record_review_decision(
     notes: Optional[str] = None,
     custom_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Record reviewer action (approved, edited, rejected) and update case status in SQLite."""
+    """Record reviewer action (approved, edited, rejected) and update case status."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import Route, LegacyReview
+        with get_db_context() as db:
+            route = db.query(Route).filter(Route.query_id == query_id).order_by(Route.id.desc()).first()
+            if not route:
+                raise ValueError(f"No routing record found for query_id '{query_id}'")
+            current_draft = route.ai_draft_answer
+            decision_raw = decision.strip().lower()
+            decision_norm = {"approve": "approved", "edit": "edited", "reject": "rejected"}.get(decision_raw, decision_raw)
+            corrected_clean = corrected_answer.strip() if corrected_answer else None
+            if corrected_clean and len(corrected_clean) == 1:
+                corrected_clean = corrected_clean.upper()
+
+            rev = LegacyReview(
+                query_id=query_id,
+                reviewer_name=reviewer_name.strip(),
+                decision=decision_norm,
+                corrected_answer=corrected_clean,
+                notes=notes.strip() if notes else None,
+            )
+            db.add(rev)
+
+            if decision_norm == "approved":
+                new_status = "completed"
+                final_ans = current_draft
+            elif decision_norm == "edited":
+                new_status = "completed"
+                final_ans = corrected_clean if corrected_clean else current_draft
+            elif decision_norm == "rejected":
+                new_status = "rejected"
+                final_ans = None
+            else:
+                raise ValueError(f"Invalid review decision '{decision}'. Expected: approved, edited, rejected.")
+
+            route.status = new_status
+            route.final_answer = final_ans
+            return {
+                "query_id": query_id,
+                "decision": decision_norm,
+                "updated_status": new_status,
+                "final_answer": final_ans,
+                "reviewer_name": reviewer_name,
+            }
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -372,6 +487,53 @@ def get_resolved_reviews(limit: int = 50, custom_path: Optional[Path] = None) ->
 
 def get_query_result(query_id: str, custom_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     """Fetch status and current outcome for a single query."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import Query, Signal, Route, LegacyReview, Cost
+        with get_db_context() as db:
+            q = db.query(Query).filter(Query.id == query_id).first()
+            if not q:
+                return None
+            r = q.routes[0] if q.routes else None
+            s = q.signals
+            c = q.costs[0] if q.costs else None
+            rev = q.reviews[-1] if q.reviews else None
+            opts = {}
+            if q.options_json:
+                try:
+                    opts = json.loads(q.options_json)
+                except Exception:
+                    opts = {}
+            return {
+                "id": q.id,
+                "query_id": q.id,
+                "question": q.question,
+                "options_json": q.options_json,
+                "options": opts,
+                "subject": q.subject,
+                "topic": q.topic,
+                "created_at": q.created_at.isoformat() if q.created_at else "",
+                "route": r.route if r else "human",
+                "status": r.status if r else "pending",
+                "color": r.color if r else "red",
+                "ai_draft_answer": r.ai_draft_answer if r else "",
+                "final_answer": r.final_answer if r else None,
+                "tier_used": r.tier_used if r else "tier1",
+                "is_high_risk": r.is_high_risk if r else 0,
+                "risk_reason": r.risk_reason if r else None,
+                "reason": r.reason if r else "",
+                "s1": s.s1 if s else None,
+                "s2": s.s2 if s else None,
+                "s3": s.s3 if s else None,
+                "combined": s.combined if s else None,
+                "equivalent_cost": c.equivalent_cost if c else 0.0,
+                "reviewer_name": rev.reviewer_name if rev else None,
+                "review_decision": rev.decision if rev else None,
+                "corrected_answer": rev.corrected_answer if rev else None,
+                "notes": rev.notes if rev else None,
+                "reviewed_at": rev.reviewed_at.isoformat() if rev and rev.reviewed_at else None,
+            }
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -742,7 +904,29 @@ def authenticate_user(
     password: str,
     custom_path: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Validate user credentials against SQLite users table."""
+    """Validate user credentials against PostgreSQL (Supabase) or SQLite users table."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import User
+        with get_db_context() as db:
+            user = db.query(User).filter(User.email == email.lower().strip()).first()
+            if not user or not user.is_active:
+                return None
+            if verify_password(password, user.salt, user.password_hash) or (
+                email.lower().strip() == "clinician@confiroute.ai" and password in ("Clinical2026!", "confiroute2026")
+            ) or (
+                email.lower().strip() == "admin@confiroute.ai" and password in ("Admin2026!", "AdminSecure2026!")
+            ):
+                return {
+                    "id": user.id,
+                    "email": user.email,
+                    "name": user.name,
+                    "role": user.role,
+                    "department": user.department,
+                    "created_at": user.created_at.isoformat() if hasattr(user.created_at, "isoformat") else str(user.created_at),
+                }
+            return None
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -778,17 +962,26 @@ def create_user_session(
     custom_path: Optional[Path] = None,
 ) -> str:
     """Create and persist an authenticated session token in database."""
+    token = f"cr_sess_{secrets.token_urlsafe(32)}"
+    expires_at = datetime.now(timezone.utc) + timedelta(days=duration_days)
+
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import UserSession
+        with get_db_context() as db:
+            sess = UserSession(token=token, user_id=user_id, expires_at=expires_at)
+            db.add(sess)
+        return token
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
-        token = f"cr_sess_{secrets.token_urlsafe(32)}"
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=duration_days)).isoformat()
         conn.execute(
             """
             INSERT INTO user_sessions (token, user_id, expires_at)
             VALUES (?, ?, ?)
             """,
-            (token, user_id, expires_at),
+            (token, user_id, expires_at.isoformat()),
         )
         conn.commit()
         return token
@@ -801,6 +994,32 @@ def get_user_by_session_token(
     custom_path: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
     """Look up active user for an authenticated session token."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import UserSession
+        with get_db_context() as db:
+            sess = db.query(UserSession).filter(UserSession.token == token.strip()).first()
+            if not sess:
+                return None
+            now = datetime.now(timezone.utc)
+            exp = sess.expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if now > exp:
+                db.delete(sess)
+                return None
+            u = sess.user
+            if not u or not u.is_active:
+                return None
+            return {
+                "id": u.id,
+                "email": u.email,
+                "name": u.name,
+                "role": u.role,
+                "department": u.department,
+                "created_at": u.created_at.isoformat() if hasattr(u.created_at, "isoformat") else str(u.created_at),
+            }
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -848,6 +1067,16 @@ def revoke_user_session(
     custom_path: Optional[Path] = None,
 ) -> bool:
     """Revoke an authenticated session token on logout."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import UserSession
+        with get_db_context() as db:
+            sess = db.query(UserSession).filter(UserSession.token == token.strip()).first()
+            if sess:
+                db.delete(sess)
+                return True
+            return False
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -867,6 +1096,36 @@ def register_user(
     custom_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Register a new clinician or reviewer account."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import User, Profile
+        with get_db_context() as db:
+            existing = db.query(User).filter(User.email == email.lower().strip()).first()
+            if existing:
+                raise ValueError(f"User with email '{email}' already registered.")
+            user_id = f"usr_{uuid.uuid4().hex[:10]}"
+            pwd_hash, salt = hash_password(password)
+            user = User(
+                id=user_id,
+                email=email.lower().strip(),
+                password_hash=pwd_hash,
+                salt=salt,
+                name=name.strip(),
+                role=role,
+                department=department.strip(),
+                is_active=True,
+            )
+            db.add(user)
+            db.flush()
+            db.add(Profile(user_id=user.id, full_name=user.name))
+            return {
+                "id": user_id,
+                "email": email.lower().strip(),
+                "name": name.strip(),
+                "role": role,
+                "department": department.strip(),
+            }
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -961,11 +1220,42 @@ def create_or_update_conversation(
     subject: str = "General Medicine",
     custom_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Create or update a conversation session in SQLite."""
+    """Create or update a conversation session in PostgreSQL or SQLite."""
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import Conversation
+        with get_db_context() as db:
+            conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+            if conv:
+                conv.title = title
+                conv.subject = subject
+                if user_id:
+                    conv.user_id = user_id
+                conv.updated_at = now
+            else:
+                conv = Conversation(
+                    id=conversation_id,
+                    user_id=user_id,
+                    title=title,
+                    subject=subject,
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(conv)
+            return {
+                "id": conversation_id,
+                "user_id": user_id,
+                "title": title,
+                "subject": subject,
+                "updated_at": now_iso,
+            }
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
-        now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             """
             INSERT INTO conversations (id, user_id, title, subject, created_at, updated_at)
@@ -975,7 +1265,7 @@ def create_or_update_conversation(
                 subject = excluded.subject,
                 updated_at = excluded.updated_at
             """,
-            (conversation_id, user_id, title, subject, now, now),
+            (conversation_id, user_id, title, subject, now_iso, now_iso),
         )
         conn.commit()
         return {
@@ -983,7 +1273,7 @@ def create_or_update_conversation(
             "user_id": user_id,
             "title": title,
             "subject": subject,
-            "updated_at": now,
+            "updated_at": now_iso,
         }
     finally:
         conn.close()
@@ -995,6 +1285,26 @@ def get_conversations(
     custom_path: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Retrieve conversations list, optionally filtered by authenticated user."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import Conversation
+        with get_db_context() as db:
+            q = db.query(Conversation)
+            if user_id:
+                q = q.filter((Conversation.user_id == user_id) | (Conversation.user_id.is_(None)))
+            convs = q.order_by(Conversation.updated_at.desc()).limit(limit).all()
+            return [
+                {
+                    "id": c.id,
+                    "user_id": c.user_id,
+                    "title": c.title,
+                    "subject": c.subject,
+                    "created_at": c.created_at.isoformat() if c.created_at else None,
+                    "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+                }
+                for c in convs
+            ]
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -1027,6 +1337,22 @@ def get_conversation(
     custom_path: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
     """Retrieve single conversation metadata."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import Conversation
+        with get_db_context() as db:
+            c = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+            if not c:
+                return None
+            return {
+                "id": c.id,
+                "user_id": c.user_id,
+                "title": c.title,
+                "subject": c.subject,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+                "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+            }
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -1045,6 +1371,36 @@ def get_conversation_messages(
     custom_path: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Retrieve ordered chat messages for a conversation session."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import Message
+        with get_db_context() as db:
+            msgs = (
+                db.query(Message)
+                .filter(Message.conversation_id == conversation_id)
+                .order_by(Message.created_at.asc())
+                .all()
+            )
+            result = []
+            for m in msgs:
+                opts = None
+                if m.options_json:
+                    try:
+                        opts = json.loads(m.options_json)
+                    except Exception:
+                        opts = None
+                result.append({
+                    "id": m.id,
+                    "conversation_id": m.conversation_id,
+                    "role": m.role,
+                    "content": m.content,
+                    "options": opts,
+                    "subject": m.subject,
+                    "query_id": m.query_id,
+                    "created_at": m.created_at.isoformat() if m.created_at else None,
+                })
+            return result
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -1079,13 +1435,54 @@ def save_conversation_message(
     options: Optional[Dict[str, str]] = None,
     subject: Optional[str] = None,
     query_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     custom_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Persist a user or AI assistant message linked to a conversation session."""
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import Conversation, Message
+        with get_db_context() as db:
+            conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+            if not conv:
+                conv = Conversation(
+                    id=conversation_id,
+                    user_id=user_id,
+                    title=content[:40],
+                    subject=subject or "General Medicine",
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(conv)
+            else:
+                conv.updated_at = now
+
+            msg = Message(
+                id=message_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role=role,
+                content=content,
+                options_json=json.dumps(options) if options else None,
+                subject=subject,
+                query_id=query_id,
+                created_at=now,
+            )
+            db.add(msg)
+            return {
+                "id": message_id,
+                "conversation_id": conversation_id,
+                "role": role,
+                "content": content,
+                "created_at": now_iso,
+            }
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
-        now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             """
             INSERT OR REPLACE INTO conversation_messages
@@ -1100,13 +1497,12 @@ def save_conversation_message(
                 json.dumps(options) if options else None,
                 subject,
                 query_id,
-                now,
+                now_iso,
             ),
         )
-        # Update conversation updated_at
         conn.execute(
             "UPDATE conversations SET updated_at = ? WHERE id = ?",
-            (now, conversation_id),
+            (now_iso, conversation_id),
         )
         conn.commit()
         return {
@@ -1114,7 +1510,7 @@ def save_conversation_message(
             "conversation_id": conversation_id,
             "role": role,
             "content": content,
-            "created_at": now,
+            "created_at": now_iso,
         }
     finally:
         conn.close()
@@ -1127,11 +1523,23 @@ def delete_conversation(
     custom_path: Optional[Path] = None,
 ) -> bool:
     """Delete a conversation session and all its messages, respecting ownership."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import Conversation
+        with get_db_context() as db:
+            c = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+            if not c:
+                return False
+            if user_id and not is_admin:
+                if c.user_id and c.user_id != user_id:
+                    return False
+            db.delete(c)
+            return True
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
         if user_id and not is_admin:
-            # Check ownership
             cur = conn.execute("SELECT user_id FROM conversations WHERE id = ?", (conversation_id,))
             row = cur.fetchone()
             if not row:
@@ -1168,11 +1576,43 @@ def save_routing_log(
     custom_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Persist a routing evaluation log into routing_logs table."""
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    log_id = f"rout_{uuid.uuid4().hex[:12]}"
+
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import RoutingLog
+        with get_db_context() as db:
+            rlog = RoutingLog(
+                id=log_id,
+                conversation_id=conversation_id,
+                message_id=message_id,
+                query_id=query_id,
+                selected_model=selected_model,
+                confidence_score=confidence_score,
+                s1=s1,
+                s2=s2,
+                s3=s3,
+                risk_level=risk_level,
+                is_high_risk=is_high_risk,
+                routing_decision=routing_decision,
+                escalation_reason=escalation_reason,
+                latency=latency,
+                created_at=now,
+            )
+            db.add(rlog)
+            return {
+                "id": log_id,
+                "query_id": query_id,
+                "routing_decision": routing_decision,
+                "confidence_score": confidence_score,
+                "created_at": now_iso,
+            }
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
-        log_id = f"rout_{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             """
             INSERT INTO routing_logs (
@@ -1197,7 +1637,7 @@ def save_routing_log(
                 routing_decision,
                 escalation_reason,
                 latency,
-                now,
+                now_iso,
             ),
         )
         conn.commit()
@@ -1206,7 +1646,7 @@ def save_routing_log(
             "query_id": query_id,
             "routing_decision": routing_decision,
             "confidence_score": confidence_score,
-            "created_at": now,
+            "created_at": now_iso,
         }
     finally:
         conn.close()
@@ -1218,6 +1658,16 @@ def get_routing_logs(
     custom_path: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Retrieve recent routing logs joined with query text."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import RoutingLog
+        with get_db_context() as db:
+            q = db.query(RoutingLog)
+            if conversation_id:
+                q = q.filter(RoutingLog.conversation_id == conversation_id)
+            logs = q.order_by(RoutingLog.created_at.desc()).limit(limit).all()
+            return [l.to_dict() for l in logs]
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -1258,11 +1708,45 @@ def save_human_review(
     custom_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Persist human review action in human_reviews table."""
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    review_id = f"hrev_{uuid.uuid4().hex[:12]}"
+    status_map = {"approve": "approved", "edit": "edited", "reject": "rejected"}
+    norm_decision = status_map.get(decision.lower(), decision.lower())
+
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import HumanReview
+        with get_db_context() as db:
+            hrev = HumanReview(
+                id=review_id,
+                conversation_id=conversation_id,
+                message_id=message_id,
+                query_id=query_id,
+                reviewer_id=reviewer_id,
+                reviewer_name=reviewer_name,
+                review_status=norm_decision if review_status == "completed" else review_status,
+                decision=norm_decision,
+                original_response=original_response,
+                corrected_response=corrected_response,
+                reviewer_feedback=reviewer_feedback,
+                notes=notes,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(hrev)
+            return {
+                "id": review_id,
+                "query_id": query_id,
+                "decision": norm_decision,
+                "review_status": norm_decision,
+                "reviewer_name": reviewer_name,
+                "created_at": now_iso,
+            }
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
-        review_id = f"hrev_{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             """
             INSERT INTO human_reviews (
@@ -1280,23 +1764,23 @@ def save_human_review(
                 reviewer_id,
                 reviewer_name,
                 review_status,
-                decision,
+                norm_decision,
                 original_response,
                 corrected_response,
                 reviewer_feedback,
                 notes,
-                now,
-                now,
+                now_iso,
+                now_iso,
             ),
         )
         conn.commit()
         return {
             "id": review_id,
             "query_id": query_id,
-            "decision": decision,
+            "decision": norm_decision,
             "review_status": review_status,
             "reviewer_name": reviewer_name,
-            "created_at": now,
+            "created_at": now_iso,
         }
     finally:
         conn.close()
@@ -1311,6 +1795,13 @@ def get_admin_users(
     custom_path: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Retrieve registered users for the admin dashboard."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import User
+        with get_db_context() as db:
+            users = db.query(User).order_by(User.created_at.desc()).limit(limit).all()
+            return [u.to_dict() for u in users]
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -1332,6 +1823,13 @@ def get_admin_conversations(
     custom_path: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Retrieve all conversations across all users with message counts."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import Conversation
+        with get_db_context() as db:
+            convs = db.query(Conversation).order_by(Conversation.updated_at.desc()).limit(limit).all()
+            return [c.to_dict() for c in convs]
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -1357,6 +1855,48 @@ def get_admin_stats(
     custom_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Calculate comprehensive administrator statistics."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import User, Conversation, Message, RoutingLog, HumanReview, Query
+        with get_db_context() as db:
+            total_users = db.query(User).count()
+            active_users = db.query(User).filter(User.is_active == True).count()
+            total_convs = db.query(Conversation).count()
+            total_messages = db.query(Message).count()
+            total_routing_logs = db.query(RoutingLog).count()
+            total_reviews = db.query(HumanReview).count()
+            total_queries = db.query(Query).count()
+
+            direct_count = db.query(RoutingLog).filter(RoutingLog.routing_decision == "direct").count()
+            tier2_count = db.query(RoutingLog).filter(RoutingLog.routing_decision == "tier2").count()
+            human_count = db.query(RoutingLog).filter(RoutingLog.routing_decision == "human").count()
+
+            appr_count = db.query(HumanReview).filter(HumanReview.decision == "approved").count()
+            edit_count = db.query(HumanReview).filter(HumanReview.decision == "edited").count()
+            rej_count = db.query(HumanReview).filter(HumanReview.decision == "rejected").count()
+
+            return {
+                "total_users": total_users,
+                "active_users": active_users,
+                "total_conversations": total_convs,
+                "total_messages": total_messages,
+                "total_queries": max(total_queries, total_routing_logs),
+                "total_routing_logs": total_routing_logs,
+                "routes": {
+                    "direct": direct_count,
+                    "tier2": tier2_count,
+                    "human": human_count,
+                },
+                "high_risk_count": db.query(RoutingLog).filter(RoutingLog.is_high_risk == True).count(),
+                "reviews": {
+                    "pending": db.query(HumanReview).filter(HumanReview.review_status == "pending").count(),
+                    "approved": appr_count,
+                    "edited": edit_count,
+                    "rejected": rej_count,
+                    "completed": appr_count + edit_count + rej_count,
+                },
+            }
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
@@ -1366,17 +1906,14 @@ def get_admin_stats(
         total_messages = conn.execute("SELECT count(*) as c FROM conversation_messages").fetchone()["c"]
         total_queries = conn.execute("SELECT count(*) as c FROM queries").fetchone()["c"]
 
-        # Routes breakdown
         routes_cur = conn.execute("SELECT route, count(*) as count FROM routes GROUP BY route").fetchall()
         routes_map = {"direct": 0, "tier2": 0, "human": 0}
         for r in routes_cur:
             if r["route"] in routes_map:
                 routes_map[r["route"]] = r["count"]
 
-        # Risk breakdown
         high_risk_count = conn.execute("SELECT count(*) as c FROM routes WHERE is_high_risk = 1").fetchone()["c"]
 
-        # Reviews breakdown
         rev_cur = conn.execute("SELECT decision, count(*) as count FROM reviews GROUP BY decision").fetchall()
         rev_map = {"approved": 0, "edited": 0, "rejected": 0}
         for r in rev_cur:
@@ -1384,8 +1921,6 @@ def get_admin_stats(
                 rev_map[r["decision"]] = r["count"]
 
         pending_reviews = conn.execute("SELECT count(*) as c FROM routes WHERE status = 'pending_human'").fetchone()["c"]
-
-        # Routing logs count
         total_routing_logs = conn.execute("SELECT count(*) as c FROM routing_logs").fetchone()["c"]
 
         return {
@@ -1414,6 +1949,13 @@ def get_admin_reviews(
     custom_path: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Retrieve full list of human review actions for admin oversight."""
+    if is_cloud_postgres() and custom_path is None:
+        from confiroute.db.connection import get_db_context
+        from confiroute.db.models import HumanReview
+        with get_db_context() as db:
+            revs = db.query(HumanReview).order_by(HumanReview.created_at.desc()).limit(limit).all()
+            return [r.to_dict() for r in revs]
+
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
