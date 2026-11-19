@@ -190,6 +190,30 @@ export default function AppSidebar({
               <span>Audit & Telemetry</span>
             </div>
           </button>
+
+          {user?.role === "admin" && (
+            <button
+              onClick={() => {
+                setCurrentView("admin");
+                setMobileOpen(false);
+              }}
+              className={`w-full px-3 py-2 rounded-xl text-xs font-medium flex items-center justify-between transition-colors cursor-pointer ${
+                currentView === "admin"
+                  ? "bg-[#25241F] text-[#FAF8F5] font-semibold shadow-xs"
+                  : "text-[#8C7349] hover:bg-[#F0EBE2]"
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <ShieldCheck className={`w-4 h-4 ${currentView === "admin" ? "text-[#C5A878]" : "text-[#B79A68]"}`} />
+                <span>Admin Console</span>
+              </div>
+              <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider ${
+                currentView === "admin" ? "bg-[#C5A878] text-[#25241F]" : "bg-[#F3EDE2] text-[#8C7349]"
+              }`}>
+                ADMIN
+              </span>
+            </button>
+          )}
         </div>
 
         {/* Clinical Presets Drawer Toggle */}

@@ -5,6 +5,7 @@ import ChatWorkspace from "./pages/ChatWorkspace";
 import ReviewQueueView from "./pages/ReviewQueueView";
 import SideBySideView from "./pages/SideBySideView";
 import AnalyticsView from "./pages/AnalyticsView";
+import AdminDashboardView from "./pages/AdminDashboardView";
 import AppSidebar from "./components/AppSidebar";
 import ReviewModal from "./components/ReviewModal";
 import SettingsModal from "./components/SettingsModal";
@@ -465,6 +466,10 @@ function MainApp() {
 
         {currentView === "analytics" && (
           <AnalyticsView onToggleMobileSidebar={() => setMobileSidebarOpen(true)} />
+        )}
+
+        {currentView === "admin" && user?.role === "admin" && (
+          <AdminDashboardView onToggleMobileSidebar={() => setMobileSidebarOpen(true)} />
         )}
       </div>
 

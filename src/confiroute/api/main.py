@@ -23,6 +23,8 @@ from confiroute.routing.router import route_query, RouteDecision
 from confiroute.llm.base import ask_llm
 from confiroute.confidence.combiner import format_mcq_prompt, extract_option_letter
 from confiroute.alerts.alerts import check_and_record_alerts
+from confiroute.db.connection import get_db_context
+from confiroute.db.audit import record_audit_log
 from confiroute.db.database import (
     init_db,
     save_pipeline_execution,
@@ -44,6 +46,13 @@ from confiroute.db.database import (
     get_conversation_messages,
     save_conversation_message,
     delete_conversation,
+    save_routing_log,
+    get_routing_logs,
+    save_human_review,
+    get_admin_users,
+    get_admin_conversations,
+    get_admin_stats,
+    get_admin_reviews,
 )
 
 # Initialize database schema
@@ -302,6 +311,17 @@ def require_auth_user(authorization: Optional[str] = Header(None)) -> Dict[str, 
     return user
 
 
+def require_admin_user(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Helper enforcing valid authenticated administrator session."""
+    user = require_auth_user(authorization)
+    if user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrative privileges required to access this resource.",
+        )
+    return user
+
+
 # ---------------------------------------------------------------------------
 # Authentication Endpoints
 # ---------------------------------------------------------------------------
@@ -317,6 +337,18 @@ def login(req: LoginRequest) -> LoginResponse:
         )
     duration = 30 if req.remember_me else 1
     token = create_user_session(user["id"], duration_days=duration)
+    try:
+        with get_db_context() as db:
+            record_audit_log(
+                db=db,
+                action="user_login",
+                resource_type="auth",
+                user_id=user["id"],
+                resource_id=user["id"],
+                details={"email": user["email"], "role": user["role"]},
+            )
+    except Exception:
+        pass
     return LoginResponse(
         token=token,
         user=user,
@@ -334,24 +366,61 @@ def get_me(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
 @app.post("/auth/logout", tags=["Authentication"])
 def logout(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
     """Revoke authenticated session token."""
+    user = extract_auth_user(authorization)
     if authorization:
         token = authorization.replace("Bearer ", "").replace("bearer ", "").strip()
         revoke_user_session(token)
+        if user:
+            try:
+                with get_db_context() as db:
+                    record_audit_log(
+                        db=db,
+                        action="user_logout",
+                        resource_type="auth",
+                        user_id=user["id"],
+                        resource_id=user["id"],
+                    )
+            except Exception:
+                pass
     return {"message": "Session terminated successfully."}
 
 
 @app.post("/auth/register", response_model=LoginResponse, tags=["Authentication"])
-def register(req: RegisterRequest) -> LoginResponse:
+def register(
+    req: RegisterRequest,
+    authorization: Optional[str] = Header(None),
+) -> LoginResponse:
     """Register a new verified clinical reviewer account."""
+    # Prevent unauthorized privilege escalation to admin role
+    assigned_role = req.role.strip().lower()
+    if assigned_role == "admin":
+        requester = extract_auth_user(authorization)
+        if not requester or requester.get("role") != "admin":
+            assigned_role = "reviewer"
+    elif assigned_role not in ("reviewer", "clinician"):
+        assigned_role = "reviewer"
+
     try:
         user = register_user(
             email=req.email,
             password=req.password,
             name=req.name,
-            role=req.role,
+            role=assigned_role,
             department=req.department,
         )
         token = create_user_session(user["id"], duration_days=7)
+        try:
+            with get_db_context() as db:
+                record_audit_log(
+                    db=db,
+                    action="user_register",
+                    resource_type="user",
+                    user_id=user["id"],
+                    resource_id=user["id"],
+                    details={"email": user["email"], "role": user["role"]},
+                )
+        except Exception:
+            pass
         return LoginResponse(
             token=token,
             user=user,
@@ -395,6 +464,23 @@ def ask_question(req: AskRequest) -> AskResponse:
         subject=req.subject,
         topic=req.topic,
     )
+
+    try:
+        save_routing_log(
+            query_id=query_id,
+            routing_decision=decision.route,
+            selected_model=decision.tier_used,
+            confidence_score=decision.scores.get("combined") if decision.scores else None,
+            s1=decision.scores.get("s1") if decision.scores else None,
+            s2=decision.scores.get("s2") if decision.scores else None,
+            s3=decision.scores.get("s3") if decision.scores else None,
+            risk_level="high" if decision.is_high_risk else "standard",
+            is_high_risk=decision.is_high_risk,
+            escalation_reason=decision.risk_reason or decision.reason,
+            latency=decision.cost_metadata.get("latency_ms", 0.0) if decision.cost_metadata else 0.0,
+        )
+    except Exception:
+        pass
 
     # Format answers
     def enrich(letter: Optional[str]) -> Optional[str]:
@@ -485,6 +571,31 @@ def submit_review(
         corrected_answer=review.corrected_answer,
         notes=review.notes,
     )
+
+    try:
+        save_human_review(
+            query_id=query_id,
+            reviewer_name=reviewer_name,
+            decision=dec_norm,
+            review_status="completed" if dec_norm in ("approved", "edited") else "rejected",
+            reviewer_id=auth_user.get("id") if (authorization and auth_user) else None,
+            original_response=existing.get("ai_draft_answer"),
+            corrected_response=review.corrected_answer,
+            reviewer_feedback=review.notes,
+            notes=review.notes,
+        )
+        if authorization and auth_user:
+            with get_db_context() as db:
+                record_audit_log(
+                    db=db,
+                    action="review_submit",
+                    resource_type="review",
+                    user_id=auth_user["id"],
+                    resource_id=query_id,
+                    details={"decision": dec_norm, "reviewer": reviewer_name},
+                )
+    except Exception:
+        pass
 
     action_msg = {
         "approved": f"Case approved. AI draft answer ({result['final_answer']}) released to user.",
@@ -733,24 +844,50 @@ def save_conversation(
     req: ConversationCreateRequest,
     authorization: Optional[str] = Header(None),
 ) -> Dict[str, Any]:
-    """Create or update a conversation session."""
+    """Create or update a conversation session with user isolation."""
     user = extract_auth_user(authorization)
     user_id = user["id"] if user else None
     conv_id = req.id or f"sess_{int(datetime.now(timezone.utc).timestamp() * 1000)}"
-    return create_or_update_conversation(
+    saved = create_or_update_conversation(
         conversation_id=conv_id,
         title=req.title,
         user_id=user_id,
         subject=req.subject,
     )
+    if user:
+        try:
+            with get_db_context() as db:
+                record_audit_log(
+                    db=db,
+                    action="conversation_create",
+                    resource_type="conversation",
+                    user_id=user["id"],
+                    resource_id=conv_id,
+                    details={"title": req.title, "subject": req.subject},
+                )
+        except Exception:
+            pass
+    return saved
 
 
 @app.get("/conversations/{conversation_id}", tags=["Conversations"])
-def get_conversation_endpoint(conversation_id: str) -> Dict[str, Any]:
-    """Retrieve full conversation details and all associated messages."""
+def get_conversation_endpoint(
+    conversation_id: str,
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """Retrieve full conversation details and all associated messages with ownership check."""
     conv = get_conversation(conversation_id)
     if not conv:
         raise HTTPException(status_code=404, detail=f"Conversation '{conversation_id}' not found.")
+
+    user = extract_auth_user(authorization)
+    if user and user.get("role") != "admin":
+        if conv.get("user_id") and conv["user_id"] != user["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: you do not have permission to view this conversation.",
+            )
+
     messages = get_conversation_messages(conversation_id)
     enriched_messages = []
     for m in messages:
@@ -776,10 +913,20 @@ def get_conversation_endpoint(conversation_id: str) -> Dict[str, Any]:
 def append_conversation_message(
     conversation_id: str,
     req: ConversationMessageRequest,
+    authorization: Optional[str] = Header(None),
 ) -> Dict[str, Any]:
     """Append a user or assistant message to the persistent conversation."""
+    conv = get_conversation(conversation_id)
+    user = extract_auth_user(authorization)
+    if conv and user and user.get("role") != "admin":
+        if conv.get("user_id") and conv["user_id"] != user["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: you cannot add messages to another clinician's conversation.",
+            )
+
     msg_id = req.id or f"msg_{int(datetime.now(timezone.utc).timestamp() * 1000)}"
-    return save_conversation_message(
+    saved = save_conversation_message(
         message_id=msg_id,
         conversation_id=conversation_id,
         role=req.role,
@@ -789,14 +936,114 @@ def append_conversation_message(
         query_id=req.query_id,
     )
 
+    if req.query_id:
+        try:
+            save_routing_log(
+                query_id=req.query_id,
+                routing_decision="assistant_response",
+                conversation_id=conversation_id,
+                message_id=msg_id,
+            )
+        except Exception:
+            pass
+
+    return saved
+
 
 @app.delete("/conversations/{conversation_id}", tags=["Conversations"])
-def remove_conversation(conversation_id: str) -> Dict[str, Any]:
-    """Delete a conversation session."""
-    deleted = delete_conversation(conversation_id)
+def remove_conversation(
+    conversation_id: str,
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """Delete a conversation session with ownership validation."""
+    conv = get_conversation(conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail=f"Conversation '{conversation_id}' not found.")
+
+    user = extract_auth_user(authorization)
+    if user and user.get("role") != "admin":
+        if conv.get("user_id") and conv["user_id"] != user["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: you cannot delete another clinician's conversation.",
+            )
+
+    deleted = delete_conversation(
+        conversation_id,
+        user_id=user["id"] if user else None,
+        is_admin=bool(user and user.get("role") == "admin"),
+    )
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Conversation '{conversation_id}' not found.")
+
+    if user:
+        try:
+            with get_db_context() as db:
+                record_audit_log(
+                    db=db,
+                    action="conversation_delete",
+                    resource_type="conversation",
+                    user_id=user["id"],
+                    resource_id=conversation_id,
+                )
+        except Exception:
+            pass
+
     return {"message": "Conversation deleted successfully."}
+
+
+# ---------------------------------------------------------------------------
+# Administrator Dashboard & Routing Logs Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/users", tags=["Admin Dashboard"])
+def admin_get_users(
+    limit: int = Query(100, ge=1, le=500),
+    authorization: Optional[str] = Header(None),
+) -> List[Dict[str, Any]]:
+    """Retrieve all registered accounts for system administrator review."""
+    require_admin_user(authorization)
+    return get_admin_users(limit=limit)
+
+
+@app.get("/admin/stats", tags=["Admin Dashboard"])
+def admin_get_stats(
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """Retrieve aggregate administrative system metrics."""
+    require_admin_user(authorization)
+    return get_admin_stats()
+
+
+@app.get("/admin/conversations", tags=["Admin Dashboard"])
+def admin_get_conversations(
+    limit: int = Query(100, ge=1, le=500),
+    authorization: Optional[str] = Header(None),
+) -> List[Dict[str, Any]]:
+    """Retrieve all conversation sessions across all clinicians."""
+    require_admin_user(authorization)
+    return get_admin_conversations(limit=limit)
+
+
+@app.get("/admin/reviews", tags=["Admin Dashboard"])
+def admin_get_reviews(
+    limit: int = Query(100, ge=1, le=500),
+    authorization: Optional[str] = Header(None),
+) -> List[Dict[str, Any]]:
+    """Retrieve all clinical reviews for quality assurance oversight."""
+    require_admin_user(authorization)
+    return get_admin_reviews(limit=limit)
+
+
+@app.get("/routing/logs", tags=["Routing Logs"])
+def get_routing_logs_endpoint(
+    limit: int = Query(100, ge=1, le=500),
+    conversation_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+) -> List[Dict[str, Any]]:
+    """Retrieve structured routing logs for clinical safety monitoring."""
+    require_auth_user(authorization)
+    return get_routing_logs(limit=limit, conversation_id=conversation_id)
 
 
 # Mount static assets and SPA fallback if frontend production build exists

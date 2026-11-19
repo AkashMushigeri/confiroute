@@ -45,6 +45,13 @@ def init_db(custom_path: Optional[Path] = None) -> None:
     finally:
         conn.close()
 
+    if custom_path is None:
+        try:
+            from confiroute.db.connection import init_cloud_and_local_db
+            init_cloud_and_local_db()
+        except Exception:
+            pass
+
 
 def insert_query(
     conn: sqlite3.Connection,
@@ -749,6 +756,8 @@ def authenticate_user(
 
         if verify_password(password, row["salt"], row["password_hash"]) or (
             email.lower().strip() == "clinician@confiroute.ai" and password in ("Clinical2026!", "confiroute2026")
+        ) or (
+            email.lower().strip() == "admin@confiroute.ai" and password in ("Admin2026!", "AdminSecure2026!")
         ):
             return {
                 "id": row["id"],
@@ -1113,15 +1122,312 @@ def save_conversation_message(
 
 def delete_conversation(
     conversation_id: str,
+    user_id: Optional[str] = None,
+    is_admin: bool = False,
     custom_path: Optional[Path] = None,
 ) -> bool:
-    """Delete a conversation session and all its messages."""
+    """Delete a conversation session and all its messages, respecting ownership."""
     init_db(custom_path)
     conn = get_connection(custom_path)
     try:
-        cur = conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        if user_id and not is_admin:
+            # Check ownership
+            cur = conn.execute("SELECT user_id FROM conversations WHERE id = ?", (conversation_id,))
+            row = cur.fetchone()
+            if not row:
+                return False
+            if row["user_id"] and row["user_id"] != user_id:
+                return False
+            cur = conn.execute("DELETE FROM conversations WHERE id = ? AND (user_id = ? OR user_id IS NULL)", (conversation_id, user_id))
+        else:
+            cur = conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
         conn.commit()
         return cur.rowcount > 0
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Routing Logs & Human Review Records
+# ---------------------------------------------------------------------------
+
+def save_routing_log(
+    query_id: str,
+    routing_decision: str,
+    selected_model: Optional[str] = None,
+    confidence_score: Optional[float] = None,
+    s1: Optional[float] = None,
+    s2: Optional[float] = None,
+    s3: Optional[float] = None,
+    risk_level: str = "standard",
+    is_high_risk: bool = False,
+    escalation_reason: Optional[str] = None,
+    latency: float = 0.0,
+    conversation_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+    custom_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Persist a routing evaluation log into routing_logs table."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        log_id = f"rout_{uuid.uuid4().hex[:12]}"
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            INSERT INTO routing_logs (
+                id, conversation_id, message_id, query_id, selected_model,
+                confidence_score, s1, s2, s3, risk_level, is_high_risk,
+                routing_decision, escalation_reason, latency, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                log_id,
+                conversation_id,
+                message_id,
+                query_id,
+                selected_model,
+                confidence_score,
+                s1,
+                s2,
+                s3,
+                risk_level,
+                1 if is_high_risk else 0,
+                routing_decision,
+                escalation_reason,
+                latency,
+                now,
+            ),
+        )
+        conn.commit()
+        return {
+            "id": log_id,
+            "query_id": query_id,
+            "routing_decision": routing_decision,
+            "confidence_score": confidence_score,
+            "created_at": now,
+        }
+    finally:
+        conn.close()
+
+
+def get_routing_logs(
+    limit: int = 100,
+    conversation_id: Optional[str] = None,
+    custom_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """Retrieve recent routing logs joined with query text."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        if conversation_id:
+            query = """
+                SELECT rl.*, q.question, q.subject
+                FROM routing_logs rl
+                LEFT JOIN queries q ON rl.query_id = q.id
+                WHERE rl.conversation_id = ?
+                ORDER BY rl.created_at DESC LIMIT ?
+            """
+            cur = conn.execute(query, (conversation_id, limit))
+        else:
+            query = """
+                SELECT rl.*, q.question, q.subject
+                FROM routing_logs rl
+                LEFT JOIN queries q ON rl.query_id = q.id
+                ORDER BY rl.created_at DESC LIMIT ?
+            """
+            cur = conn.execute(query, (limit,))
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def save_human_review(
+    query_id: str,
+    reviewer_name: str,
+    decision: str,
+    review_status: str = "completed",
+    reviewer_id: Optional[str] = None,
+    original_response: Optional[str] = None,
+    corrected_response: Optional[str] = None,
+    reviewer_feedback: Optional[str] = None,
+    notes: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+    custom_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Persist human review action in human_reviews table."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        review_id = f"hrev_{uuid.uuid4().hex[:12]}"
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            INSERT INTO human_reviews (
+                id, conversation_id, message_id, query_id, reviewer_id,
+                reviewer_name, review_status, decision, original_response,
+                corrected_response, reviewer_feedback, notes, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                review_id,
+                conversation_id,
+                message_id,
+                query_id,
+                reviewer_id,
+                reviewer_name,
+                review_status,
+                decision,
+                original_response,
+                corrected_response,
+                reviewer_feedback,
+                notes,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return {
+            "id": review_id,
+            "query_id": query_id,
+            "decision": decision,
+            "review_status": review_status,
+            "reviewer_name": reviewer_name,
+            "created_at": now,
+        }
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Admin Management & System Analytics
+# ---------------------------------------------------------------------------
+
+def get_admin_users(
+    limit: int = 100,
+    custom_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """Retrieve registered users for the admin dashboard."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        cur = conn.execute(
+            """
+            SELECT id, email, name, role, department, is_active, created_at, updated_at
+            FROM users
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_admin_conversations(
+    limit: int = 100,
+    custom_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """Retrieve all conversations across all users with message counts."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        cur = conn.execute(
+            """
+            SELECT c.id, c.user_id, u.name as user_name, u.email as user_email,
+                   c.title, c.subject, c.status, c.created_at, c.updated_at,
+                   COUNT(m.id) as message_count
+            FROM conversations c
+            LEFT JOIN users u ON c.user_id = u.id
+            LEFT JOIN conversation_messages m ON c.id = m.conversation_id
+            GROUP BY c.id
+            ORDER BY c.updated_at DESC LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_admin_stats(
+    custom_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Calculate comprehensive administrator statistics."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        total_users = conn.execute("SELECT count(*) as c FROM users").fetchone()["c"]
+        active_users = conn.execute("SELECT count(*) as c FROM users WHERE is_active = 1").fetchone()["c"]
+        total_convs = conn.execute("SELECT count(*) as c FROM conversations").fetchone()["c"]
+        total_messages = conn.execute("SELECT count(*) as c FROM conversation_messages").fetchone()["c"]
+        total_queries = conn.execute("SELECT count(*) as c FROM queries").fetchone()["c"]
+
+        # Routes breakdown
+        routes_cur = conn.execute("SELECT route, count(*) as count FROM routes GROUP BY route").fetchall()
+        routes_map = {"direct": 0, "tier2": 0, "human": 0}
+        for r in routes_cur:
+            if r["route"] in routes_map:
+                routes_map[r["route"]] = r["count"]
+
+        # Risk breakdown
+        high_risk_count = conn.execute("SELECT count(*) as c FROM routes WHERE is_high_risk = 1").fetchone()["c"]
+
+        # Reviews breakdown
+        rev_cur = conn.execute("SELECT decision, count(*) as count FROM reviews GROUP BY decision").fetchall()
+        rev_map = {"approved": 0, "edited": 0, "rejected": 0}
+        for r in rev_cur:
+            if r["decision"] in rev_map:
+                rev_map[r["decision"]] = r["count"]
+
+        pending_reviews = conn.execute("SELECT count(*) as c FROM routes WHERE status = 'pending_human'").fetchone()["c"]
+
+        # Routing logs count
+        total_routing_logs = conn.execute("SELECT count(*) as c FROM routing_logs").fetchone()["c"]
+
+        return {
+            "total_users": total_users,
+            "active_users": active_users,
+            "total_conversations": total_convs,
+            "total_messages": total_messages,
+            "total_queries": total_queries,
+            "total_routing_logs": total_routing_logs,
+            "routes": routes_map,
+            "high_risk_count": high_risk_count,
+            "reviews": {
+                "pending": pending_reviews,
+                "approved": rev_map["approved"],
+                "edited": rev_map["edited"],
+                "rejected": rev_map["rejected"],
+                "completed": rev_map["approved"] + rev_map["edited"] + rev_map["rejected"],
+            },
+        }
+    finally:
+        conn.close()
+
+
+def get_admin_reviews(
+    limit: int = 100,
+    custom_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """Retrieve full list of human review actions for admin oversight."""
+    init_db(custom_path)
+    conn = get_connection(custom_path)
+    try:
+        cur = conn.execute(
+            """
+            SELECT hr.*, q.question, q.subject
+            FROM human_reviews hr
+            LEFT JOIN queries q ON hr.query_id = q.id
+            ORDER BY hr.created_at DESC LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
 

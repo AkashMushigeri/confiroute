@@ -4,7 +4,6 @@ import {
   Eye,
   EyeOff,
   ArrowRight,
-  Sparkles,
   Lock,
   Mail,
   Activity,
@@ -18,9 +17,13 @@ import {
 import { useAuth } from "../context/AuthContext";
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, register } = useAuth();
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("clinician@confiroute.ai");
-  const [password, setPassword] = useState("confiroute2026");
+  const [password, setPassword] = useState("Clinical2026!");
+  const [department, setDepartment] = useState("Emergency Medicine");
+  const [role, setRole] = useState("reviewer");
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -35,9 +38,16 @@ export default function LoginPage() {
     setIsSubmitting(true);
 
     try {
-      const result = await login(email, password, rememberMe);
-      if (!result.success) {
-        setErrorMessage(result.error || "Authentication failed. Please verify your credentials.");
+      if (mode === "login") {
+        const result = await login(email, password, rememberMe);
+        if (!result.success) {
+          setErrorMessage(result.error || "Authentication failed. Please verify your credentials.");
+        }
+      } else {
+        const result = await register(name, email, password, role, department);
+        if (!result.success) {
+          setErrorMessage(result.error || "Registration failed. Please check your information.");
+        }
       }
     } catch {
       setErrorMessage("An unexpected network or service error occurred during authentication.");
@@ -46,9 +56,17 @@ export default function LoginPage() {
     }
   };
 
-  const fillDemoCredentials = () => {
+  const fillClinicianDemo = () => {
+    setMode("login");
     setEmail("clinician@confiroute.ai");
     setPassword("Clinical2026!");
+    setErrorMessage(null);
+  };
+
+  const fillAdminDemo = () => {
+    setMode("login");
+    setEmail("admin@confiroute.ai");
+    setPassword("AdminSecure2026!");
     setErrorMessage(null);
   };
 
@@ -217,11 +235,45 @@ export default function LoginPage() {
             </div>
 
             <h1 className="text-2xl sm:text-3xl font-heading font-bold text-[#292720] tracking-tight">
-              Sign In to AI Workspace
+              {mode === "login" ? "Sign In to AI Workspace" : "Create Clinical Account"}
             </h1>
             <p className="mt-2 text-sm text-[#777267] leading-relaxed">
-              "Intelligence that knows when to answer, escalate, or verify."
+              {mode === "login"
+                ? '"Intelligence that knows when to answer, escalate, or verify."'
+                : "Register as an authorized healthcare clinician or diagnostic reviewer."}
             </p>
+          </div>
+
+          {/* Mode Switcher Tabs */}
+          <div className="flex p-1 mb-6 rounded-2xl bg-[#EFE9DD] border border-[#E2D9C8]">
+            <button
+              type="button"
+              onClick={() => {
+                setMode("login");
+                setErrorMessage(null);
+              }}
+              className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                mode === "login"
+                  ? "bg-[#FFFEFC] text-[#292720] shadow-sm"
+                  : "text-[#777267] hover:text-[#292720]"
+              }`}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMode("register");
+                setErrorMessage(null);
+              }}
+              className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                mode === "register"
+                  ? "bg-[#FFFEFC] text-[#292720] shadow-sm"
+                  : "text-[#777267] hover:text-[#292720]"
+              }`}
+            >
+              Create Account
+            </button>
           </div>
 
           {/* Error Message Alert */}
@@ -236,7 +288,29 @@ export default function LoginPage() {
           )}
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Name Field (Register Mode Only) */}
+            {mode === "register" && (
+              <div>
+                <label className="block text-xs font-semibold text-[#4A473E] tracking-wider uppercase mb-1.5">
+                  Full Name & Clinical Credentials
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#9E988A]">
+                    <UserCheck className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Dr. Eleanor Vance, MD"
+                    required={mode === "register"}
+                    className="w-full pl-10 pr-4 py-2.5 bg-[#FAF8F5] border border-[#E8E2D5] rounded-xl text-sm text-[#292720] placeholder-[#A8A296] focus:outline-none focus:ring-2 focus:ring-[#C5A878]/50 focus:border-[#C5A878] transition-all"
+                  />
+                </div>
+              </div>
+            )}
+
             {/* Email Field */}
             <div>
               <label className="block text-xs font-semibold text-[#4A473E] tracking-wider uppercase mb-1.5">
@@ -252,10 +326,42 @@ export default function LoginPage() {
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="clinician@hospital.org"
                   required
-                  className="w-full pl-10 pr-4 py-3 bg-[#FAF8F5] border border-[#E8E2D5] rounded-xl text-sm text-[#292720] placeholder-[#A8A296] focus:outline-none focus:ring-2 focus:ring-[#C5A878]/50 focus:border-[#C5A878] transition-all"
+                  className="w-full pl-10 pr-4 py-2.5 bg-[#FAF8F5] border border-[#E8E2D5] rounded-xl text-sm text-[#292720] placeholder-[#A8A296] focus:outline-none focus:ring-2 focus:ring-[#C5A878]/50 focus:border-[#C5A878] transition-all"
                 />
               </div>
             </div>
+
+            {/* Department & Role (Register Mode Only) */}
+            {mode === "register" && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[#4A473E] tracking-wider uppercase mb-1.5">
+                    Department
+                  </label>
+                  <input
+                    type="text"
+                    value={department}
+                    onChange={(e) => setDepartment(e.target.value)}
+                    placeholder="Emergency Medicine"
+                    required
+                    className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E8E2D5] rounded-xl text-sm text-[#292720] focus:outline-none focus:ring-2 focus:ring-[#C5A878]/50"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[#4A473E] tracking-wider uppercase mb-1.5">
+                    Role
+                  </label>
+                  <select
+                    value={role}
+                    onChange={(e) => setRole(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E8E2D5] rounded-xl text-sm text-[#292720] focus:outline-none focus:ring-2 focus:ring-[#C5A878]/50 cursor-pointer"
+                  >
+                    <option value="reviewer">Clinical Reviewer</option>
+                    <option value="clinician">Staff Clinician</option>
+                  </select>
+                </div>
+              </div>
+            )}
 
             {/* Password Field */}
             <div>
@@ -263,13 +369,15 @@ export default function LoginPage() {
                 <label className="block text-xs font-semibold text-[#4A473E] tracking-wider uppercase">
                   Password
                 </label>
-                <button
-                  type="button"
-                  onClick={() => setShowForgotModal(true)}
-                  className="text-xs font-medium text-[#B79A68] hover:text-[#9E8052] transition-colors"
-                >
-                  Forgot password?
-                </button>
+                {mode === "login" && (
+                  <button
+                    type="button"
+                    onClick={() => setShowForgotModal(true)}
+                    className="text-xs font-medium text-[#B79A68] hover:text-[#9E8052] transition-colors"
+                  >
+                    Forgot password?
+                  </button>
+                )}
               </div>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#9E988A]">
@@ -281,7 +389,7 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
                   required
-                  className="w-full pl-10 pr-11 py-3 bg-[#FAF8F5] border border-[#E8E2D5] rounded-xl text-sm text-[#292720] placeholder-[#A8A296] focus:outline-none focus:ring-2 focus:ring-[#C5A878]/50 focus:border-[#C5A878] transition-all"
+                  className="w-full pl-10 pr-11 py-2.5 bg-[#FAF8F5] border border-[#E8E2D5] rounded-xl text-sm text-[#292720] placeholder-[#A8A296] focus:outline-none focus:ring-2 focus:ring-[#C5A878]/50 focus:border-[#C5A878] transition-all"
                 />
                 <button
                   type="button"
@@ -294,42 +402,53 @@ export default function LoginPage() {
               </div>
             </div>
 
-            {/* Remember Me & Quick Demo helper */}
-            <div className="flex items-center justify-between pt-1">
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                  className="w-4 h-4 rounded border-[#D5CEBF] text-[#B79A68] focus:ring-[#C5A878] accent-[#B79A68]"
-                />
-                <span className="text-xs text-[#6B665A]">Remember active session</span>
-              </label>
+            {/* Quick Demo Pre-fills (Login Mode) */}
+            {mode === "login" && (
+              <div className="flex items-center justify-between pt-1">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="w-4 h-4 rounded border-[#D5CEBF] text-[#B79A68] focus:ring-[#C5A878] accent-[#B79A68]"
+                  />
+                  <span className="text-xs text-[#6B665A]">Remember session</span>
+                </label>
 
-              <button
-                type="button"
-                onClick={fillDemoCredentials}
-                className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#8C7349] hover:text-[#64502F] underline underline-offset-2 transition-colors"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                Fill Test Reviewer
-              </button>
-            </div>
+                <div className="flex items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={fillClinicianDemo}
+                    className="font-semibold text-[#8C7349] hover:text-[#64502F] underline underline-offset-2 transition-colors cursor-pointer"
+                  >
+                    Clinician Demo
+                  </button>
+                  <span className="text-[#C8C2B3]">·</span>
+                  <button
+                    type="button"
+                    onClick={fillAdminDemo}
+                    className="font-semibold text-[#292720] hover:text-[#000000] underline underline-offset-2 transition-colors cursor-pointer"
+                  >
+                    Admin Demo
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Submit Button */}
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-[#292720] via-[#333129] to-[#25241F] text-[#FAF8F5] font-semibold text-sm shadow-md hover:shadow-xl hover:from-[#1E1D19] hover:to-[#181714] active:scale-[0.99] transition-all flex items-center justify-center gap-2.5 disabled:opacity-70 disabled:cursor-not-allowed group border border-[#444036]"
+              className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-[#292720] via-[#333129] to-[#25241F] text-[#FAF8F5] font-semibold text-sm shadow-md hover:shadow-xl hover:from-[#1E1D19] hover:to-[#181714] active:scale-[0.99] transition-all flex items-center justify-center gap-2.5 disabled:opacity-70 disabled:cursor-not-allowed group border border-[#444036] cursor-pointer mt-2"
             >
               {isSubmitting ? (
                 <>
                   <div className="w-4 h-4 border-2 border-[#C5A878] border-t-transparent rounded-full animate-spin" />
-                  <span>Authenticating Clinician...</span>
+                  <span>{mode === "login" ? "Authenticating Clinician..." : "Registering Account..."}</span>
                 </>
               ) : (
                 <>
-                  <span>Sign In to ConfiRoute</span>
+                  <span>{mode === "login" ? "Sign In to ConfiRoute" : "Complete Registration"}</span>
                   <ArrowRight className="w-4 h-4 text-[#C5A878] group-hover:translate-x-0.5 transition-transform" />
                 </>
               )}

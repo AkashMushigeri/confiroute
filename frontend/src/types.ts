@@ -142,5 +142,72 @@ export interface AuthUser {
   sessionStartedAt: string;
 }
 
+/* Admin & Audit Types */
+export interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  role: "admin" | "reviewer" | "clinician";
+  department: string;
+  is_active: boolean | number;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface AdminStats {
+  total_users: number;
+  active_users: number;
+  total_conversations: number;
+  total_messages: number;
+  total_queries: number;
+  total_routing_logs: number;
+  routes: {
+    direct: number;
+    tier2: number;
+    human: number;
+  };
+  high_risk_count: number;
+  reviews: {
+    pending: number;
+    approved: number;
+    edited: number;
+    rejected: number;
+    completed: number;
+  };
+}
+
+export interface AdminConversation {
+  id: string;
+  user_id: string | null;
+  user_name: string | null;
+  user_email: string | null;
+  title: string;
+  subject: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+export interface RoutingLogItem {
+  id: string;
+  conversation_id: string | null;
+  message_id: string | null;
+  query_id: string | null;
+  selected_model: string | null;
+  confidence_score: number | null;
+  s1: number | null;
+  s2: number | null;
+  s3: number | null;
+  risk_level: string;
+  is_high_risk: boolean | number;
+  routing_decision: Route;
+  escalation_reason: string | null;
+  latency: number;
+  created_at: string;
+  question?: string;
+  subject?: string;
+}
+
 /* Navigation views */
-export type ViewMode = "chat" | "queue" | "compare" | "analytics";
+export type ViewMode = "chat" | "queue" | "compare" | "analytics" | "admin";

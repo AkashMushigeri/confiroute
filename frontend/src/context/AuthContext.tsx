@@ -7,6 +7,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (email: string, pass: string, rememberMe: boolean) => Promise<{ success: boolean; error?: string }>;
+  register: (name: string, email: string, pass: string, role?: string, department?: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   updateProfile: (updates: Partial<AuthUser>) => void;
   integrationNote: string;
@@ -77,6 +78,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const register = async (
+    name: string,
+    email: string,
+    pass: string,
+    role = "reviewer",
+    department = "Clinical Review"
+  ): Promise<{ success: boolean; error?: string }> => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !trimmedEmail.includes("@")) {
+      return { success: false, error: "Please enter a valid clinical or institutional email address." };
+    }
+    if (!name.trim()) {
+      return { success: false, error: "Please enter your full name or clinical title." };
+    }
+    if (!pass || pass.length < 6) {
+      return { success: false, error: "Password must be at least 6 characters in length." };
+    }
+
+    try {
+      const res = await api.register(trimmedEmail, pass, name.trim(), role, department.trim());
+      setUser(res.user);
+      return { success: true };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || "Registration failed. This email may already be in use.",
+      };
+    }
+  };
+
   const logout = () => {
     api.logout().finally(() => {
       setUser(null);
@@ -98,6 +129,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAuthenticated: !!user,
         isLoading,
         login,
+        register,
         logout,
         updateProfile,
         integrationNote,

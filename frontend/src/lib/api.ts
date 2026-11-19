@@ -436,5 +436,27 @@ export const api = {
     const params = subject && subject !== "All" ? `?subject=${encodeURIComponent(subject)}` : "";
     return `${API_BASE_URL}/export/csv${params}`;
   },
+
+  // --- Admin Dashboard & Routing Logs ---
+  async getAdminUsers(limit = 100): Promise<import("../types").AdminUser[]> {
+    return fetchJSON(`/admin/users?limit=${limit}`);
+  },
+
+  async getAdminStats(): Promise<import("../types").AdminStats> {
+    return fetchJSON("/admin/stats");
+  },
+
+  async getAdminConversations(limit = 100): Promise<import("../types").AdminConversation[]> {
+    return fetchJSON(`/admin/conversations?limit=${limit}`);
+  },
+
+  async getAdminReviews(limit = 100): Promise<any[]> {
+    return fetchJSON(`/admin/reviews?limit=${limit}`);
+  },
+
+  async getRoutingLogs(limit = 100, conversationId?: string): Promise<import("../types").RoutingLogItem[]> {
+    const params = conversationId ? `&conversation_id=${encodeURIComponent(conversationId)}` : "";
+    return fetchJSON(`/routing/logs?limit=${limit}${params}`);
+  },
 };
 
